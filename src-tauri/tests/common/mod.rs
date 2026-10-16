@@ -4,15 +4,18 @@
 //! Each test binary compiles this module on its own and uses only part of it.
 #![allow(dead_code)]
 
-use std::fs;
+use std::fs::{self, File};
+use std::io::BufWriter;
 use std::path::Path;
 
+use image::codecs::gif::GifEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::{
-    DynamicImage, ExtendedColorType, GrayImage, ImageBuffer, ImageEncoder, ImageFormat, Rgb,
-    RgbImage, Rgba, RgbaImage,
+    Delay, DynamicImage, ExtendedColorType, Frame, GrayImage, ImageBuffer, ImageEncoder,
+    ImageFormat, Rgb, RgbImage, Rgba, RgbaImage,
 };
 use jpeg_xl_konverter_lib::engine::tools::Tools;
+use png::chunk::ChunkType;
 
 /// Size of every image written by the helpers that take no size argument.
 pub const FIXTURE_W: u32 = 64;
@@ -265,4 +268,47 @@ fn raw_profile_exif(chunk: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     Some(bytes.strip_prefix(b"Exif\0\0").unwrap_or(&bytes).to_vec())
+}
+
+/// An RGB8 PNG with `chunks` written between IHDR and the image data.
+pub fn write_png_with(path: &Path, chunks: &[(&[u8; 4], Vec<u8>)]) {
+    let (w, h) = (FIXTURE_W, FIXTURE_H);
+    let pixels: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let mut encoder = png::Encoder::new(BufWriter::new(File::create(path).unwrap()), w, h);
+    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder.write_header().unwrap();
+    for (kind, data) in chunks {
+        writer.write_chunk(ChunkType(**kind), data).unwrap();
+    }
+    writer.write_image_data(&pixels).unwrap();
+    writer.finish().unwrap();
+}
+
+/// EXIF block (big-endian TIFF structure) with only the Orientation tag.
+pub fn orientation_exif(orientation: u16) -> Vec<u8> {
+    const SHORT: u16 = 3;
+    let mut exif = b"MM\0*".to_vec();
+    exif.extend_from_slice(&8u32.to_be_bytes());
+    exif.extend_from_slice(&1u16.to_be_bytes());
+    exif.extend_from_slice(&0x0112u16.to_be_bytes());
+    exif.extend_from_slice(&SHORT.to_be_bytes());
+    exif.extend_from_slice(&1u32.to_be_bytes());
+    exif.extend_from_slice(&orientation.to_be_bytes());
+    exif.extend_from_slice(&[0, 0]);
+    exif.extend_from_slice(&0u32.to_be_bytes());
+    exif
+}
+
+/// A GIF with `frames` different frames.
+pub fn write_animated_gif(path: &Path, frames: u32) {
+    let mut encoder = GifEncoder::new(File::create(path).unwrap());
+    encoder
+        .encode_frames((0..frames).map(|i| {
+            let img = RgbaImage::from_fn(FIXTURE_W, FIXTURE_H, |x, y| {
+                Rgba([(x * 4) as u8, (y * 5) as u8, (i * 90) as u8, 255])
+            });
+            Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1))
+        }))
+        .unwrap();
 }

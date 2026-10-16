@@ -2,13 +2,12 @@
 
 use std::collections::HashSet;
 use std::fs;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
-use jxl_oxide::{InitializeResult, JxlImage};
 use walkdir::WalkDir;
 
 use super::formats::kind_from_path;
+use super::jxl_container::read_header;
 use super::types::{InputKind, Mode, ScanEntry};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -92,36 +91,13 @@ fn identity(path: &Path) -> PathBuf {
 
 fn dimensions(path: &Path, kind: InputKind) -> Option<(u32, u32)> {
     if kind == InputKind::Jxl {
-        return jxl_dimensions(path);
+        return read_header(path).map(|image| (image.width(), image.height()));
     }
     let size = imagesize::size(path).ok()?;
     Some((
         u32::try_from(size.width).ok()?,
         u32::try_from(size.height).ok()?,
     ))
-}
-
-/// Reads just enough of a JXL file to parse its image header; nothing is
-/// decoded. `None` when the header is missing, broken or truncated.
-fn jxl_dimensions(path: &Path) -> Option<(u32, u32)> {
-    let mut file = fs::File::open(path).ok()?;
-    let mut uninit = JxlImage::builder().build_uninit();
-    let mut buf = vec![0u8; 4096];
-    let mut valid = 0;
-    loop {
-        let count = file.read(&mut buf[valid..]).ok()?;
-        if count == 0 {
-            return None;
-        }
-        valid += count;
-        let consumed = uninit.feed_bytes(&buf[..valid]).ok()?;
-        buf.copy_within(consumed..valid, 0);
-        valid -= consumed;
-        match uninit.try_init().ok()? {
-            InitializeResult::Initialized(image) => return Some((image.width(), image.height())),
-            InitializeResult::NeedMoreData(more) => uninit = more,
-        }
-    }
 }
 
 #[cfg(test)]

@@ -1,9 +1,11 @@
 //! Reads the box structure of a JXL container to find out whether the file
-//! carries JPEG reconstruction data (a `jbrd` box).
+//! carries JPEG reconstruction data (a `jbrd` box), and the image header.
 
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
+
+use jxl_oxide::{InitializeResult, JxlImage};
 
 /// First two bytes of a JXL file without a container.
 const CODESTREAM_SIGNATURE: [u8; 2] = [0xFF, 0x0A];
@@ -24,6 +26,30 @@ const LARGE_HEADER_LEN: u64 = 16;
 /// smaller than its own header) is an `InvalidData` error.
 pub fn has_jpeg_reconstruction(path: &Path) -> io::Result<bool> {
     contains_jbrd(&mut File::open(path)?)
+}
+
+/// Reads just enough of a JXL file to parse its image header (size,
+/// orientation, animation); nothing is decoded. `None` when the file cannot
+/// be read or the header is missing, broken or truncated.
+pub(crate) fn read_header(path: &Path) -> Option<JxlImage> {
+    let mut file = File::open(path).ok()?;
+    let mut uninit = JxlImage::builder().build_uninit();
+    let mut buf = vec![0u8; 4096];
+    let mut valid = 0;
+    loop {
+        let count = file.read(&mut buf[valid..]).ok()?;
+        if count == 0 {
+            return None;
+        }
+        valid += count;
+        let consumed = uninit.feed_bytes(&buf[..valid]).ok()?;
+        buf.copy_within(consumed..valid, 0);
+        valid -= consumed;
+        match uninit.try_init().ok()? {
+            InitializeResult::Initialized(image) => return Some(image),
+            InitializeResult::NeedMoreData(more) => uninit = more,
+        }
+    }
 }
 
 /// Walks the top-level boxes, seeking over their contents.

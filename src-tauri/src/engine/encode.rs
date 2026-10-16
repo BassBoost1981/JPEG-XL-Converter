@@ -8,23 +8,23 @@
 //! pages, unverified animation frames). Everything this module writes besides
 //! the target (the `.tmp` and the work files) is removed on every way out.
 
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{self, BufReader, Read};
-use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::path::Path;
 
 use image::metadata::Orientation;
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
-use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
-use windows::core::HSTRING;
 
-use super::args::{DjxlTarget, cjxl_args, djxl_args};
+use super::args::{DjxlTarget, cjxl_args};
 use super::convert_io::{MetaState, MetaTransfer, PngMeta, scan_png, to_png};
 use super::jxl_container::has_jpeg_reconstruction;
 use super::originals::{RecycleBin, TrashContext, copy_file_times, handle_original};
-use super::targets::tmp_path;
-use super::tools::{ToolError, Tools, extended_length};
-use super::types::{CancelToken, InputKind, ItemStatus, JobSettings, Outcome, ScanEntry};
+use super::pipeline_util::{
+    NOTE_DATES, NOTE_METADATA, Scratch, Stop, check_cancel, check_target, finished, open_reason,
+    place, prepare, run_djxl,
+};
+use super::tools::{ToolError, Tools};
+use super::types::{CancelToken, InputKind, JobSettings, Outcome, ScanEntry};
 use super::verify::{dims_match, files_identical, image_dims, same_pixels};
 
 pub struct Ctx<'a> {
@@ -38,73 +38,13 @@ pub struct Ctx<'a> {
     pub progress: &'a dyn Fn(u8),
 }
 
-const TARGET_EXISTS: &str = "Zieldatei existiert bereits";
 const NOT_TRANSCODABLE: &str = "JPEG lässt sich nicht verlustfrei umpacken";
-const NOTE_METADATA: &str = "Metadaten nicht vollständig übernommen";
 const NOTE_FIRST_PAGE: &str = "Nur die erste Seite übernommen – Original behalten";
 const NOTE_ANIMATION: &str = "Animation – Original behalten";
-const NOTE_DATES: &str = "Dateidatum nicht übernommen";
 const READ_ERROR: &str = "Bild lässt sich nicht lesen";
-const NOTE_SEPARATOR: &str = " · ";
 
 /// Largest decoded image the pixel check accepts (as in `convert_io`).
 const MAX_DECODED_BYTES: u64 = 4 << 30;
-
-/// Makes the work file names of parallel calls distinct.
-static NEXT_WORK_ID: AtomicU64 = AtomicU64::new(0);
-
-/// Why a file did not get to the end.
-enum Stop {
-    Skipped(&'static str),
-    Error(String),
-    VerifyFailed(&'static str),
-    Cancelled,
-}
-
-impl Stop {
-    fn error(reason: &str) -> Stop {
-        Stop::Error(reason.to_string())
-    }
-
-    fn into_outcome(self) -> Outcome {
-        let (status, note) = match self {
-            Stop::Skipped(note) => (ItemStatus::Skipped, Some(note.to_string())),
-            Stop::Error(reason) => (ItemStatus::Error, Some(reason)),
-            Stop::VerifyFailed(reason) => (ItemStatus::VerifyFailed, Some(reason.to_string())),
-            // The queue puts the entry back.
-            Stop::Cancelled => (ItemStatus::Waiting, None),
-        };
-        Outcome {
-            status,
-            out_path: None,
-            out_size: None,
-            note,
-        }
-    }
-}
-
-/// Files removed when the call ends, however it ends.
-#[derive(Default)]
-struct Scratch(Vec<PathBuf>);
-
-impl Scratch {
-    fn add(&mut self, path: PathBuf) -> PathBuf {
-        self.0.push(path.clone());
-        path
-    }
-
-    fn keep(&mut self, path: &Path) {
-        self.0.retain(|p| p != path);
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        for path in &self.0 {
-            let _ = fs::remove_file(path);
-        }
-    }
-}
 
 /// Converts `entry` to `target` (which must not exist yet).
 /// Progress: 5 at the start, 60 after converting, 90 after the check, 100 done.
@@ -124,31 +64,13 @@ fn run(
     let keep_metadata = settings.keep_metadata;
     let source = entry.path.as_path();
 
-    if fs::symlink_metadata(target).is_ok() {
-        return Err(Stop::Skipped(TARGET_EXISTS));
-    }
+    check_target(target)?;
     check_cancel(ctx)?;
     check_source(source, entry.kind)?;
 
-    let tmp = tmp_path(target);
-    match fs::remove_file(&tmp) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => {
-            return Err(Stop::error("Alte Zwischendatei lässt sich nicht löschen"));
-        }
-        _ => {}
-    }
-    scratch.add(tmp.clone());
-    if let Some(dir) = target.parent() {
-        fs::create_dir_all(dir).map_err(|_| Stop::error("Zielordner lässt sich nicht anlegen"))?;
-    }
-    fs::create_dir_all(ctx.work_dir)
-        .map_err(|_| Stop::error("Arbeitsordner lässt sich nicht anlegen"))?;
-    let work = format!(
-        "enc-{}-{}",
-        std::process::id(),
-        NEXT_WORK_ID.fetch_add(1, Ordering::Relaxed)
-    );
-    let work_file = |suffix: &str| ctx.work_dir.join(format!("{work}-{suffix}"));
+    let work = prepare(target, ctx, scratch, "enc")?;
+    let tmp = work.tmp.clone();
+    let work_file = |suffix: &str| work.file(suffix);
 
     // ---- convert
     let transcode = entry.kind == InputKind::Jpeg && settings.encode.transcode_jpeg;
@@ -187,7 +109,13 @@ fn run(
     if transcode {
         let restored = scratch.add(work_file("pruefung.jpg"));
         let failed = "JPEG lässt sich nicht wiederherstellen";
-        decode(ctx, &tmp, &restored, DjxlTarget::ReconstructJpeg, failed)?;
+        run_djxl(
+            ctx,
+            &tmp,
+            &restored,
+            DjxlTarget::ReconstructJpeg,
+            Stop::VerifyFailed(failed),
+        )?;
         if !files_identical(source, &restored).unwrap_or(false) {
             return Err(Stop::VerifyFailed(
                 "Wiederhergestelltes JPEG weicht vom Original ab",
@@ -198,12 +126,12 @@ fn run(
         let to_png = DjxlTarget::Png {
             reduce_to_8bit: false,
         };
-        decode(
+        run_djxl(
             ctx,
             &tmp,
             &decoded,
             to_png,
-            "JPEG XL lässt sich nicht dekodieren",
+            Stop::VerifyFailed("JPEG XL lässt sich nicht dekodieren"),
         )?;
         if lossless {
             check_pixels(&input, &decoded, keep_metadata)?;
@@ -218,14 +146,7 @@ fn run(
     check_cancel(ctx)?;
 
     // ---- finish
-    if move_new(&tmp, target).is_err() {
-        return Err(if fs::symlink_metadata(target).is_ok() {
-            Stop::Skipped(TARGET_EXISTS)
-        } else {
-            Stop::error("Zieldatei lässt sich nicht anlegen")
-        });
-    }
-    scratch.keep(&tmp);
+    place(&tmp, target, scratch)?;
     let dates_copied = copy_file_times(source, target).is_ok();
 
     let pages_lost = transfer.is_some_and(|t| t.frames == MetaState::Lost);
@@ -253,24 +174,7 @@ fn run(
     notes.extend(handle_original(&trash, source, ctx.bin));
     (ctx.progress)(100);
 
-    Ok(Outcome {
-        status: if notes.is_empty() {
-            ItemStatus::Done
-        } else {
-            ItemStatus::DoneWithNote
-        },
-        out_path: Some(target.to_path_buf()),
-        out_size: fs::metadata(target).ok().map(|m| m.len()),
-        note: (!notes.is_empty()).then(|| notes.join(NOTE_SEPARATOR)),
-    })
-}
-
-fn check_cancel(ctx: &Ctx) -> Result<(), Stop> {
-    if ctx.cancel.is_cancelled() {
-        Err(Stop::Cancelled)
-    } else {
-        Ok(())
-    }
+    Ok(finished(target, notes))
 }
 
 /// The source can be opened, and for the formats cjxl reads directly the
@@ -292,35 +196,6 @@ fn check_source(path: &Path, kind: InputKind) -> Result<(), Stop> {
         Ok(found) if found == expected => Ok(()),
         Ok(_) => Err(Stop::error("Inhalt passt nicht zur Dateiendung")),
         Err(_) => Err(Stop::error(READ_ERROR)),
-    }
-}
-
-fn open_reason(e: &io::Error) -> &'static str {
-    const ERROR_SHARING_VIOLATION: i32 = 32;
-    const ERROR_LOCK_VIOLATION: i32 = 33;
-    match (e.kind(), e.raw_os_error()) {
-        (io::ErrorKind::NotFound, _) => "Datei nicht gefunden",
-        (_, Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)) => {
-            "Datei wird von einem anderen Programm verwendet"
-        }
-        _ => "Datei lässt sich nicht öffnen",
-    }
-}
-
-/// djxl `jxl` → `out`, as part of the check: a failure is a failed check.
-fn decode(
-    ctx: &Ctx,
-    jxl: &Path,
-    out: &Path,
-    target: DjxlTarget,
-    failed: &'static str,
-) -> Result<(), Stop> {
-    match ctx.tools.run_djxl(jxl, out, &djxl_args(target), ctx.cancel) {
-        Ok(()) => Ok(()),
-        Err(ToolError {
-            cancelled: true, ..
-        }) => Err(Stop::Cancelled),
-        Err(_) => Err(Stop::VerifyFailed(failed)),
     }
 }
 
@@ -379,15 +254,6 @@ fn pixels_equal(a: &DynamicImage, b: &DynamicImage) -> bool {
     } else {
         same_pixels(a, b)
     }
-}
-
-/// Renames `from` to `to`, failing if `to` exists (`fs::rename` would replace it).
-fn move_new(from: &Path, to: &Path) -> windows::core::Result<()> {
-    let from = HSTRING::from(extended_length(from).as_path());
-    let to = HSTRING::from(extended_length(to).as_path());
-    // SAFETY: both arguments are valid, NUL-terminated wide strings that live
-    // until the call returns.
-    unsafe { MoveFileExW(&from, &to, MOVE_FILE_FLAGS(0)) }
 }
 
 /// What the cjxl input holds besides its first image.

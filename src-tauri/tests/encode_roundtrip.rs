@@ -5,15 +5,14 @@ mod common;
 
 use std::cell::RefCell;
 use std::fs::{self, File, FileTimes};
-use std::io::BufWriter;
 use std::os::windows::fs::{FileTimesExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use common::{FIXTURE_H, FIXTURE_W, JpegOpts, PngKind};
+use image::Frame;
 use image::codecs::gif::{GifEncoder, Repeat};
-use image::{Delay, Frame, Rgba, RgbaImage};
 use jpeg_xl_konverter_lib::engine::args::{DjxlTarget, djxl_args};
 use jpeg_xl_konverter_lib::engine::encode::{Ctx, encode_one};
 use jpeg_xl_konverter_lib::engine::originals::{Availability, FakeRecycleBin};
@@ -25,7 +24,6 @@ use jpeg_xl_konverter_lib::engine::types::{
     OutputFormat, OutputLocation, ScanEntry,
 };
 use jpeg_xl_konverter_lib::engine::verify::same_pixels;
-use png::chunk::ChunkType;
 use tempfile::TempDir;
 use tiff::encoder::{TiffEncoder as RawTiffEncoder, colortype};
 
@@ -152,49 +150,6 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 }
 
 // ---------------------------------------------------------------- fixtures
-
-/// An RGB8 PNG with `chunks` written between IHDR and the image data.
-fn write_png_with(path: &Path, chunks: &[(&[u8; 4], Vec<u8>)]) {
-    let (w, h) = (FIXTURE_W, FIXTURE_H);
-    let pixels: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
-    let mut encoder = png::Encoder::new(BufWriter::new(File::create(path).unwrap()), w, h);
-    encoder.set_color(png::ColorType::Rgb);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().unwrap();
-    for (kind, data) in chunks {
-        writer.write_chunk(ChunkType(**kind), data).unwrap();
-    }
-    writer.write_image_data(&pixels).unwrap();
-    writer.finish().unwrap();
-}
-
-/// EXIF block (big-endian TIFF structure) with only the Orientation tag.
-fn orientation_exif(orientation: u16) -> Vec<u8> {
-    const SHORT: u16 = 3;
-    let mut exif = b"MM\0*".to_vec();
-    exif.extend_from_slice(&8u32.to_be_bytes());
-    exif.extend_from_slice(&1u16.to_be_bytes());
-    exif.extend_from_slice(&0x0112u16.to_be_bytes());
-    exif.extend_from_slice(&SHORT.to_be_bytes());
-    exif.extend_from_slice(&1u32.to_be_bytes());
-    exif.extend_from_slice(&orientation.to_be_bytes());
-    exif.extend_from_slice(&[0, 0]);
-    exif.extend_from_slice(&0u32.to_be_bytes());
-    exif
-}
-
-/// A GIF with `frames` different frames.
-fn write_animated_gif(path: &Path, frames: u32) {
-    let mut encoder = GifEncoder::new(File::create(path).unwrap());
-    encoder
-        .encode_frames((0..frames).map(|i| {
-            let img = RgbaImage::from_fn(FIXTURE_W, FIXTURE_H, |x, y| {
-                Rgba([(x * 4) as u8, (y * 5) as u8, (i * 90) as u8, 255])
-            });
-            Frame::from_parts(img, 0, 0, Delay::from_numer_denom_ms(100, 1))
-        }))
-        .unwrap();
-}
 
 /// A TIFF with `pages` pages (one directory each).
 fn write_tiff_pages(path: &Path, pages: usize) {
@@ -361,14 +316,14 @@ fn oriented_png_lossless_verifies() {
     let env = Env::new();
     for orientation in [6u16, 3, 8] {
         let src = env.path(&format!("gedreht{orientation}.png"));
-        write_png_with(&src, &[(b"eXIf", orientation_exif(orientation))]);
+        common::write_png_with(&src, &[(b"eXIf", common::orientation_exif(orientation))]);
         let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
         assert_done(&outcome, &target);
         assert!(env.recycled().contains(&src), "{orientation}");
     }
     // Without metadata cjxl drops the orientation; still pixel-identical.
     let src = env.path("ohne.png");
-    write_png_with(&src, &[(b"eXIf", orientation_exif(6))]);
+    common::write_png_with(&src, &[(b"eXIf", common::orientation_exif(6))]);
     let (outcome, target) = env.encode(&src, &settings(0.0, false, false));
     assert_done(&outcome, &target);
 }
@@ -377,7 +332,7 @@ fn oriented_png_lossless_verifies() {
 fn animated_gif_is_never_trashed() {
     let env = Env::new();
     let src = env.path("animiert.gif");
-    write_animated_gif(&src, 2);
+    common::write_animated_gif(&src, 2);
     let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
     assert_eq!(outcome.note.as_deref(), Some(NOTE_ANIMATION));
@@ -407,7 +362,7 @@ fn multi_page_tiff_keeps_original() {
 fn png_text_chunk_keeps_original() {
     let env = Env::new();
     let src = env.path("text.png");
-    write_png_with(&src, &[(b"tEXt", b"Title\0Urlaub".to_vec())]);
+    common::write_png_with(&src, &[(b"tEXt", b"Title\0Urlaub".to_vec())]);
     let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
     assert_eq!(outcome.note.as_deref(), Some(NOTE_METADATA));
@@ -420,7 +375,7 @@ fn png_display_chunks_do_not_keep_original() {
     // cjxl drops pHYs (DPI), but by Ruling R20 that is not metadata loss.
     let env = Env::new();
     let src = env.path("dpi.png");
-    write_png_with(
+    common::write_png_with(
         &src,
         &[(b"pHYs", vec![0, 0, 0x0b, 0x13, 0, 0, 0x0b, 0x13, 1])],
     );
@@ -464,7 +419,7 @@ fn gif_comment_keeps_original() {
 fn png_exif_survives_and_original_goes() {
     let env = Env::new();
     let src = env.path("exif.png");
-    write_png_with(&src, &[(b"eXIf", common::minimal_exif(MARKER))]);
+    common::write_png_with(&src, &[(b"eXIf", common::minimal_exif(MARKER))]);
     let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
     assert_done(&outcome, &target);
     assert_eq!(env.recycled(), [src]);
@@ -635,7 +590,7 @@ fn lossy_jpeg_reencode_checks_dims_and_keeps_original() {
 fn metadata_off_never_trashes() {
     let env = Env::new();
     let src = env.path("exif.png");
-    write_png_with(&src, &[(b"eXIf", common::minimal_exif(MARKER))]);
+    common::write_png_with(&src, &[(b"eXIf", common::minimal_exif(MARKER))]);
     let (outcome, target) = env.encode(&src, &settings(0.0, false, true));
     assert_done(&outcome, &target);
     assert!(env.recycled().is_empty());
