@@ -187,9 +187,12 @@ Geprüft am 2026-10-16 mit PNG-Testbildern (64 × 48), `cjxl -d 0 -e 7`, dann `d
 
 `djxl` schreibt immer `sRGB`, `gAMA` und `cHRM` (bzw. `iCCP`). Deshalb prüft `encode.rs`
 nach dem Dekodieren, ob EXIF und XMP der Quelle auch im Ergebnis stehen, und zählt jeden
-anderen Zusatz-Chunk der Quelle (alles außer Bildstruktur, Farbe und Animation) als verloren
+anderen Text-Chunk der Quelle (`tEXt`, `zTXt`, `iTXt`: Titel, Autor, Kommentar, IPTC …) als verloren
 (`convert_io::PngMeta::other_metadata`). Dann bleibt das Original liegen und der Eintrag
-bekommt den Hinweis „Metadaten nicht vollständig übernommen“.
+bekommt den Hinweis „Metadaten nicht vollständig übernommen“. `pHYs`, `tIME`, `bKGD`, `sPLT`,
+`hIST` und ähnliche Anzeige-Chunks gehen ebenfalls verloren, zählen aber nicht (Ruling R20).
+Beim GIF zählen Kommentare und unbekannte Anwendungs-Erweiterungen (z. B. XMP), nicht aber
+`NETSCAPE2.0`/`ANIMEXTS1.0` (Wiederholungen).
 
 ### Weitere Beobachtungen
 

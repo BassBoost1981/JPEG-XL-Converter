@@ -585,9 +585,10 @@ pub struct PngMeta {
     pub icc: bool,
     /// An animated PNG (APNG) with more than one frame.
     pub animated: bool,
-    /// Any other chunk that is neither image structure nor colour nor
-    /// animation: other text chunks (title, author, IPTC ...), `pHYs`, `tIME`,
-    /// `bKGD`, private chunks. cjxl v0.12.0 drops them (docs/libjxl-notes.md).
+    /// A text chunk (`tEXt`, `zTXt`, `iTXt`) other than the EXIF and XMP ones:
+    /// title, author, comment, IPTC ... cjxl v0.12.0 drops them
+    /// (docs/libjxl-notes.md). Display chunks such as `pHYs`, `tIME` or
+    /// `bKGD` are dropped too but do not count (Ruling R20).
     pub other_metadata: bool,
 }
 
@@ -669,11 +670,6 @@ pub fn scan_png(path: &Path) -> Result<PngMeta, String> {
     scan(&mut input).map_err(|_| READ_ERROR.to_string())
 }
 
-/// Chunks that hold image data, colour or animation, which cjxl takes over.
-const STRUCTURE_CHUNKS: [&[u8; 4]; 10] = [
-    b"IHDR", b"PLTE", b"IDAT", b"tRNS", b"sRGB", b"gAMA", b"cHRM", b"acTL", b"fcTL", b"fdAT",
-];
-
 /// Walks the chunks up to `IEND`, skipping over the data.
 fn scan(input: &mut BufReader<File>) -> io::Result<PngMeta> {
     read_signature(input)?;
@@ -693,7 +689,7 @@ fn scan(input: &mut BufReader<File>) -> io::Result<PngMeta> {
             }
             (_, Some(Payload::Exif)) => found.exif = true,
             (_, Some(Payload::Xmp)) => found.xmp = true,
-            (kind, None) if !STRUCTURE_CHUNKS.contains(&kind) => found.other_metadata = true,
+            (b"tEXt" | b"zTXt" | b"iTXt", None) => found.other_metadata = true,
             _ => {}
         }
         input.seek_relative(chunk.remaining() as i64)?;

@@ -12,7 +12,7 @@ use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
 use common::{FIXTURE_H, FIXTURE_W, JpegOpts, PngKind};
-use image::codecs::gif::GifEncoder;
+use image::codecs::gif::{GifEncoder, Repeat};
 use image::{Delay, Frame, Rgba, RgbaImage};
 use jpeg_xl_konverter_lib::engine::args::{DjxlTarget, djxl_args};
 use jpeg_xl_konverter_lib::engine::encode::{Ctx, encode_one};
@@ -404,7 +404,7 @@ fn multi_page_tiff_keeps_original() {
 }
 
 #[test]
-fn png_metadata_cjxl_drops_keeps_original() {
+fn png_text_chunk_keeps_original() {
     let env = Env::new();
     let src = env.path("text.png");
     write_png_with(&src, &[(b"tEXt", b"Title\0Urlaub".to_vec())]);
@@ -413,6 +413,36 @@ fn png_metadata_cjxl_drops_keeps_original() {
     assert_eq!(outcome.note.as_deref(), Some(NOTE_METADATA));
     assert!(target.is_file());
     assert!(env.recycled().is_empty());
+}
+
+#[test]
+fn png_display_chunks_do_not_keep_original() {
+    // cjxl drops pHYs (DPI), but by Ruling R20 that is not metadata loss.
+    let env = Env::new();
+    let src = env.path("dpi.png");
+    write_png_with(
+        &src,
+        &[(b"pHYs", vec![0, 0, 0x0b, 0x13, 0, 0, 0x0b, 0x13, 1])],
+    );
+    let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
+    assert_done(&outcome, &target);
+    assert_eq!(env.recycled(), [src]);
+}
+
+#[test]
+fn gif_loop_extension_is_recyclable() {
+    let env = Env::new();
+    let src = env.path("schleife.gif");
+    {
+        let mut encoder = GifEncoder::new(File::create(&src).unwrap());
+        encoder.set_repeat(Repeat::Infinite).unwrap();
+        let img = common::gradient_rgba8(FIXTURE_W, FIXTURE_H);
+        encoder.encode_frame(Frame::new(img)).unwrap();
+    }
+    assert!(contains(&fs::read(&src).unwrap(), b"NETSCAPE2.0"));
+    let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
+    assert_done(&outcome, &target);
+    assert_eq!(env.recycled(), [src]);
 }
 
 #[test]

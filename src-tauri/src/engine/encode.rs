@@ -445,8 +445,8 @@ impl SourceFacts {
 #[derive(Debug, Default)]
 struct GifFacts {
     frames: u32,
-    /// Comments, plain-text blocks and application data other than the loop
-    /// count (XMP, ICC profiles): cjxl does not carry them.
+    /// Comments, and application data other than the loop count (XMP, ICC
+    /// profiles): cjxl does not carry them (Ruling R20).
     other_metadata: bool,
 }
 
@@ -455,8 +455,8 @@ fn scan_gif(path: &Path) -> io::Result<GifFacts> {
     const IMAGE: u8 = 0x2C;
     const EXTENSION: u8 = 0x21;
     const TRAILER: u8 = 0x3B;
-    const GRAPHIC_CONTROL: u8 = 0xF9;
     const APPLICATION: u8 = 0xFF;
+    const COMMENT: u8 = 0xFE;
 
     let mut r = BufReader::new(File::open(path)?);
     // Signature (6) and logical screen descriptor (7).
@@ -479,7 +479,6 @@ fn scan_gif(path: &Path) -> io::Result<GifFacts> {
                 skip_sub_blocks(&mut r)?;
             }
             EXTENSION => match read_u8(&mut r)? {
-                GRAPHIC_CONTROL => skip_sub_blocks(&mut r)?,
                 APPLICATION => {
                     let len = read_u8(&mut r)?;
                     let mut id = vec![0u8; usize::from(len)];
@@ -489,10 +488,12 @@ fn scan_gif(path: &Path) -> io::Result<GifFacts> {
                     }
                     skip_sub_blocks(&mut r)?;
                 }
-                _ => {
+                COMMENT => {
                     facts.other_metadata = true;
                     skip_sub_blocks(&mut r)?;
                 }
+                // Graphic control, plain text: display, not metadata.
+                _ => skip_sub_blocks(&mut r)?,
             },
             _ => return Err(io::ErrorKind::InvalidData.into()),
         }
