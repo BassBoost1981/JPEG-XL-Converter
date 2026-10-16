@@ -41,6 +41,9 @@ export interface AppState {
 
 const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
+const SAVE_DELAY_MS = 500;
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
 const isFailed = (s: ItemStatus) => s === "error" || s === "verifyFailed";
 
 export const useApp = create<AppState>()((set, get) => ({
@@ -156,7 +159,12 @@ export const useApp = create<AppState>()((set, get) => ({
   updateSettings(patch) {
     const settings = { ...get().settings, ...patch };
     set({ settings });
-    backend.saveSettings(settings).catch((e) => set({ notice: errorMessage(e) }));
+    // Debounced (trailing): sliders fire many updates, only the latest state is persisted.
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => {
+      saveTimer = undefined;
+      backend.saveSettings(get().settings).catch((e) => set({ notice: errorMessage(e) }));
+    }, SAVE_DELAY_MS);
   },
 
   applyEvent(e) {
@@ -205,6 +213,17 @@ export const useApp = create<AppState>()((set, get) => ({
     } catch {
       // Unreadable settings: keep defaults.
     }
-    return () => unsubs.forEach((u) => u());
+    // A pending save is written when the page goes away; losing it would only lose the last change.
+    const flush = () => {
+      if (saveTimer === undefined) return;
+      clearTimeout(saveTimer);
+      saveTimer = undefined;
+      backend.saveSettings(get().settings).catch(() => {});
+    };
+    window.addEventListener("pagehide", flush);
+    return () => {
+      window.removeEventListener("pagehide", flush);
+      unsubs.forEach((u) => u());
+    };
   },
 }));

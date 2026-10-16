@@ -65,7 +65,28 @@ describe("useApp", () => {
   it("updateSettings speichert über das Backend", async () => {
     useApp.getState().updateSettings({ preset: "sm" });
     expect(useApp.getState().settings.preset).toBe("sm");
+    await vi.advanceTimersByTimeAsync(500);
     expect(await backend.loadSettings()).toMatchObject({ preset: "sm" });
+  });
+
+  it("entprellt das Speichern: viele Änderungen ergeben genau einen Speichervorgang mit dem letzten Wert", async () => {
+    const save = vi.spyOn(backend, "saveSettings");
+    for (let q = 50; q < 60; q++) {
+      useApp.getState().updateSettings({ quality: q });
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    expect(useApp.getState().settings.quality).toBe(59);
+    expect(save).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ quality: 59 }));
+  });
+
+  it("ein Speicherfehler setzt nur den Hinweis", async () => {
+    vi.spyOn(backend, "saveSettings").mockRejectedValue(new Error("kaputt"));
+    useApp.getState().updateSettings({ effort: 3 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(useApp.getState().notice).toBe("kaputt");
   });
 
   it("Papierkorb-Schalter startet nach dem Laden immer aus", async () => {
