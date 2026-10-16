@@ -7,6 +7,7 @@ pub mod formats;
 pub mod jxl_container;
 pub mod originals;
 mod pipeline_util;
+pub mod preview;
 pub mod queue;
 pub mod report;
 pub mod scan;

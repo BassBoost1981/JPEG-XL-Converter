@@ -3,7 +3,7 @@
 //! running djxl, the pixel comparison, and moving the checked result into place.
 
 use std::fs;
-use std::io;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -40,6 +40,16 @@ const NOTE_SEPARATOR: &str = " · ";
 
 /// Makes the work file names of parallel calls distinct.
 static NEXT_WORK_ID: AtomicU64 = AtomicU64::new(0);
+
+/// A prefix for work file names, unique within the process (and across
+/// processes sharing a work folder).
+pub(super) fn unique_prefix(kind: &str) -> String {
+    format!(
+        "{kind}-{}-{}",
+        std::process::id(),
+        NEXT_WORK_ID.fetch_add(1, Ordering::Relaxed)
+    )
+}
 
 /// Why a file did not get to the end.
 pub(super) enum Stop {
@@ -158,11 +168,7 @@ pub(super) fn prepare<'a>(
     }
     fs::create_dir_all(ctx.work_dir)
         .map_err(|_| Stop::error("Arbeitsordner lässt sich nicht anlegen"))?;
-    let prefix = format!(
-        "{kind}-{}-{}",
-        std::process::id(),
-        NEXT_WORK_ID.fetch_add(1, Ordering::Relaxed)
-    );
+    let prefix = unique_prefix(kind);
     Ok(Work {
         tmp,
         dir: ctx.work_dir,
@@ -225,8 +231,13 @@ fn move_new(from: &Path, to: &Path) -> windows::core::Result<()> {
 }
 
 /// The first image of a file and its EXIF orientation. Refused (not aborted)
-/// when it would not fit into `MAX_DECODED_BYTES`.
+/// when it would not fit into `MAX_DECODED_BYTES` or is CMYK.
 pub(super) fn load(path: &Path) -> Result<(DynamicImage, Orientation), ()> {
+    // The image crate turns CMYK into RGB by a naive formula (and does not say
+    // so for JPEG); never compare or show that.
+    if jpeg_component_count(path) == Some(4) {
+        return Err(());
+    }
     let mut reader = ImageReader::open(path)
         .and_then(ImageReader::with_guessed_format)
         .map_err(drop)?;
@@ -248,5 +259,44 @@ pub(super) fn pixels_equal(a: &DynamicImage, b: &DynamicImage) -> bool {
         a.width() == b.width() && a.height() == b.height() && a.as_bytes() == b.as_bytes()
     } else {
         same_pixels(a, b)
+    }
+}
+
+/// The number of colour components a JPEG file announces in its frame header
+/// (4 = CMYK), or `None` if the file is not a JPEG or the header is unreadable.
+fn jpeg_component_count(path: &Path) -> Option<u8> {
+    let mut file = io::BufReader::new(fs::File::open(path).ok()?);
+    let mut head = [0u8; 2];
+    file.read_exact(&mut head).ok()?;
+    if head != [0xFF, 0xD8] {
+        return None;
+    }
+    loop {
+        // Segments follow each other: 0xFF, marker code, length, payload.
+        let mut marker = [0u8; 2];
+        file.read_exact(&mut marker).ok()?;
+        if marker[0] != 0xFF {
+            return None;
+        }
+        let code = marker[1];
+        // Start of scan or end of image: no frame header came before.
+        if matches!(code, 0xD9 | 0xDA) {
+            return None;
+        }
+        let mut len = [0u8; 2];
+        file.read_exact(&mut len).ok()?;
+        let len = u64::from(u16::from_be_bytes(len));
+        let is_frame = matches!(code, 0xC0..=0xCF) && !matches!(code, 0xC4 | 0xC8 | 0xCC);
+        if is_frame {
+            // precision (1), height (2), width (2), component count (1)
+            let mut frame = [0u8; 6];
+            file.read_exact(&mut frame).ok()?;
+            return Some(frame[5]);
+        }
+        io::copy(
+            &mut (&mut file).take(len.saturating_sub(2)),
+            &mut io::sink(),
+        )
+        .ok()?;
     }
 }
