@@ -18,7 +18,7 @@ function stubMatchMedia(dark: boolean) {
 beforeEach(() => {
   stubMatchMedia(false);
   vi.spyOn(backend, "saveSettings").mockResolvedValue();
-  useApp.setState({ settings: DEFAULT_SETTINGS });
+  useApp.setState({ settings: DEFAULT_SETTINGS, run: "idle" });
   document.documentElement.classList.remove("dark");
 });
 
@@ -42,6 +42,15 @@ describe("TitleBar", () => {
     render(<TitleBar />);
     await userEvent.click(screen.getByRole("tab", { name: "Aus JPEG XL" }));
     expect(useApp.getState().settings.mode).toBe("dec");
+  });
+
+  it.each(["running", "paused"] as const)("sperrt den Modus-Wechsel, solange der Lauf %s ist", async (run) => {
+    useApp.setState({ run });
+    render(<TitleBar />);
+    const tab = screen.getByRole("tab", { name: "Aus JPEG XL" });
+    expect(tab).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(tab);
+    expect(useApp.getState().settings.mode).toBe("enc");
   });
 
   it("der Experten-Schalter setzt expert", async () => {

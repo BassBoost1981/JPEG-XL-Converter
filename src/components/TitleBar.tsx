@@ -24,6 +24,8 @@ function LabeledSwitch({ label, selected, onChange }: { label: string; selected:
 export function TitleBar() {
   const mode = useApp((s) => s.settings.mode);
   const expert = useApp((s) => s.settings.expert);
+  // The mode stays fixed while a run is active (also while it is paused).
+  const busy = useApp((s) => s.run === "running" || s.run === "paused");
   const updateSettings = useApp((s) => s.updateSettings);
   const { dark, setDark } = useTheme();
 
@@ -39,7 +41,7 @@ export function TitleBar() {
         </span>
       </div>
 
-      <Tabs selectedKey={mode} onSelectionChange={(k) => updateSettings({ mode: k as Mode })}>
+      <Tabs isDisabled={busy} selectedKey={mode} onSelectionChange={(k) => updateSettings({ mode: k as Mode })}>
         <Tabs.ListContainer>
           <Tabs.List aria-label="Richtung">
             <Tabs.Tab id="enc" className="whitespace-nowrap">
