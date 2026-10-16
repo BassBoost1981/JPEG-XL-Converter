@@ -85,7 +85,7 @@ Serde mit `#[serde(rename_all = "camelCase")]`, Enums als kleingeschriebene Stri
 
 ```rust
 pub enum Mode { Enc, Dec }                                   // "enc" | "dec"
-pub enum InputKind { Jpeg, Png, Gif, Exr, Tiff, Webp, Bmp, Jxl }
+pub enum InputKind { Jpeg, Png, Gif, Tiff, Webp, Bmp, Jxl }   // Ruling R8: kein EXR (cjxl v0.12.0 kann es nicht lesen)
 pub enum OutputFormat { Auto, Png, Jpg, Webp, Tiff }         // "auto" | "png" | "jpg" | "webp" | "tiff"
 pub enum OutputLocation { Next, Folder { path: PathBuf } }   // {"kind":"next"} | {"kind":"folder","path":…}
 pub struct EncodeSettings { pub distance: f32, pub effort: u8, pub transcode_jpeg: bool }
@@ -178,10 +178,10 @@ body { font-variant-numeric: tabular-nums; }
     // keep_metadata=false: Png → enthält die EXIF- und XMP-Strip-Optionen; Jpeg+transcode → enthält sie nicht
 }
 #[test] fn djxl_targets() {
-    assert_eq!(djxl_args(DjxlTarget::ReconstructJpeg), vec!["--reconstruct_jpeg", "--num_threads=2"]);
-    assert_eq!(djxl_args(DjxlTarget::PixelsToJpeg{quality:92}), vec!["--pixels_to_jpeg", "--jpeg_quality=92", "--num_threads=2"]);
-    assert_eq!(djxl_args(DjxlTarget::Png{reduce_to_8bit:true}), vec!["--bits_per_sample=8", "--num_threads=2"]);
-    assert_eq!(djxl_args(DjxlTarget::Png{reduce_to_8bit:false}), vec!["--num_threads=2"]);
+    assert_eq!(djxl_args(DjxlTarget::ReconstructJpeg), vec!["--reconstruct_jpeg", "--output_format=jpg", "--num_threads=2"]);
+    assert_eq!(djxl_args(DjxlTarget::PixelsToJpeg{quality:92}), vec!["--pixels_to_jpeg", "--jpeg_quality=92", "--output_format=jpg", "--num_threads=2"]);
+    assert_eq!(djxl_args(DjxlTarget::Png{reduce_to_8bit:true}), vec!["--bits_per_sample=8", "--output_format=png", "--num_threads=2"]);
+    assert_eq!(djxl_args(DjxlTarget::Png{reduce_to_8bit:false}), vec!["--output_format=png", "--num_threads=2"]);
 }
 ```
   Die Distanz wird mit `format!("{}", d)` ausgegeben (`0`, `0.5`, `1.2`, `2.6`).
@@ -211,7 +211,7 @@ body { font-variant-numeric: tabular-nums; }
 
 **Interfaces:**
 - Produces:
-  - `formats::kind_from_path(p: &Path) -> Option<InputKind>` (Endung ohne Groß/Klein: jpg, jpeg, png, gif, exr, tif, tiff, webp, bmp, jxl)
+  - `formats::kind_from_path(p: &Path) -> Option<InputKind>` (Endung ohne Groß/Klein: jpg, jpeg, png, gif, tif, tiff, webp, bmp, jxl; `.exr` wird abgelehnt, Ruling R8)
   - `scan::scan_paths(paths: &[PathBuf], mode: Mode) -> ScanResult { entries: Vec<ScanEntry>, rejected: usize }`. Ordner werden rekursiv mit `walkdir` durchsucht. Bei `Enc` ist alles außer `Jxl` erlaubt, bei `Dec` nur `Jxl`. Maße per `imagesize`, bei JXL per `jxl-oxide`-Header. Unlesbare Maße → 0 × 0, die Datei bleibt aber drin.
   - `targets::target_path(entry: &ScanEntry, ext: &str, output: &OutputLocation) -> PathBuf`
   - `targets::tmp_path(target: &Path) -> PathBuf` (hängt `.tmp` an: `foto.jxl.tmp`)
@@ -317,7 +317,7 @@ Ablauf (Spezifikation 5.1):
    - TIFF/WebP/BMP: erst `to_png` in `work_dir`.
 4. Prüfen:
    - JPEG umgepackt: `djxl --reconstruct_jpeg` in `work_dir`, dann `files_identical`.
-   - Distanz 0: `djxl` → PNG, dann `same_pixels` mit dem Ausgangsbild. EXR: nur Maße prüfen.
+   - Distanz 0: `djxl` → PNG, dann `same_pixels` mit dem Ausgangsbild.
    - Sonst: `djxl` → PNG, dann Maße prüfen.
    - Bei Fehlschlag: tmp löschen, `VerifyFailed`.
 5. tmp → Ziel umbenennen, `copy_file_times(original, target)`.
@@ -578,7 +578,7 @@ Darstellung:
 - Kopf „Warteschlange“ + Chip mit Anzahl („1 Datei“ / „N Dateien“), Knöpfe „Dateien“, „Ordner hinzufügen“, „Leeren“ (rot, während eines Laufs gesperrt).
 - Spaltenkopf „Datei / Original / Ergebnis / Ersparnis (Enc) bzw. Änderung (Dec) / Status“, Spaltenraster `40px minmax(0,1fr) 80px 80px 72px 110px`.
 - Liste mit `@tanstack/react-virtual` (Zeilenhöhe 54 px).
-- Leere Liste → gestrichelte Ablagefläche „Bilder oder Ordner hierher ziehen“ mit Untertitel „JPEG, PNG, GIF, TIFF, WebP, BMP, EXR“ (Enc) bzw. „.jxl-Dateien“ (Dec).
+- Leere Liste → gestrichelte Ablagefläche „Bilder oder Ordner hierher ziehen“ mit Untertitel „JPEG, PNG, GIF, TIFF, WebP, BMP“ (Enc, Ruling R8) bzw. „.jxl-Dateien“ (Dec).
 - Statuschip: Wartet (grau), „N %“ (blau), Fertig (grün), Fertig mit Hinweis (grün + Info-Symbol), Übersprungen (grau), Fehler (rot), Prüfung fehlgeschlagen (rot). Der Hinweis- bzw. Fehlertext steht im HeroUI-`Tooltip`.
 - Ergebnis/Ersparnis zeigen „—“, bis die Zeile fertig ist.
 - Vorschaubilder werden nur für sichtbare Zeilen über `backend.thumbnail` geladen.
