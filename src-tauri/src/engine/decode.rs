@@ -5,12 +5,16 @@
 //! The `.jxl` goes to the recycle bin only when the result holds everything
 //! it had: a reconstructed JPEG (byte for byte the original), or a PNG/TIFF at
 //! full bit depth with all metadata, and never for an animation (only its
-//! first frame is written and checked). Everything this module writes besides
-//! the target is removed on every way out.
+//! first frame is written and checked) or for samples a PNG cannot hold
+//! (floating point, more than 16 bits, extra channels besides alpha).
+//! Everything this module writes besides the target is removed on every way
+//! out.
 
 use std::fs::File;
 use std::io;
 use std::path::Path;
+
+use jxl_oxide::image::BitDepth;
 
 use super::args::DjxlTarget;
 use super::convert_io::{
@@ -26,6 +30,7 @@ use super::types::{Outcome, OutputFormat, ScanEntry};
 use super::verify::{dims_match, image_dims};
 
 const NOTE_ANIMATION: &str = "Animation – .jxl behalten";
+const NOTE_NOT_EXACT: &str = "Gleitkomma- oder Mehrkanal-Bild – .jxl behalten";
 const DECODE_FAILED: &str = "Umwandlung aus JPEG XL fehlgeschlagen";
 const READ_ERROR: &str = "JPEG XL lässt sich nicht lesen";
 
@@ -74,7 +79,7 @@ fn run(
 
     check_target(target)?;
     check_cancel(ctx)?;
-    let animated = is_animated(source)?;
+    let HeaderFacts { animated, fits_png } = header_facts(source)?;
     let jbrd = has_jpeg_reconstruction(source).map_err(|_| Stop::error(READ_ERROR))?;
     let output = match decode.format {
         OutputFormat::Auto | OutputFormat::Jpg if jbrd => Output::Reconstructed,
@@ -140,9 +145,10 @@ fn run(
     let dates_copied = copy_file_times(source, target).is_ok();
 
     let reconstructed = output == Output::Reconstructed;
-    let lossless = reconstructed
-        || (matches!(output, Output::Png | Output::Converted(OutputFormat::Tiff))
-            && !decode.reduce_to_8bit);
+    // djxl writes PNG (and so TIFF) as integers of at most 16 bits.
+    let full_depth = matches!(output, Output::Png | Output::Converted(OutputFormat::Tiff))
+        && !decode.reduce_to_8bit;
+    let lossless = reconstructed || (full_depth && fits_png);
     let metadata_lost = keep_metadata
         && transfer.is_some_and(|t| t.exif == MetaState::Lost || t.icc == MetaState::Lost);
     let trash = TrashContext {
@@ -163,6 +169,9 @@ fn run(
     if animated && settings.trash_originals {
         notes.push(NOTE_ANIMATION.to_string());
     }
+    if full_depth && !fits_png && settings.trash_originals {
+        notes.push(NOTE_NOT_EXACT.to_string());
+    }
     notes.extend(handle_original(&trash, source, ctx.bin));
     (ctx.progress)(100);
 
@@ -181,11 +190,30 @@ fn check_pixels(png: &Path, tiff: &Path) -> Result<(), Stop> {
     }
 }
 
-/// The source can be opened; `true` if its image header announces an
-/// animation. Read from the file itself, because djxl drops frames of 0 ms
-/// when it writes an animated PNG.
-fn is_animated(path: &Path) -> Result<bool, Stop> {
+/// What the image header of the source says.
+struct HeaderFacts {
+    /// An animation. Read from the file itself, because djxl drops frames of
+    /// 0 ms when it writes an animated PNG.
+    animated: bool,
+    /// Every channel is an integer of at most 16 bits and the only extra
+    /// channel (if any) is alpha, so the PNG/TIFF djxl writes holds all of it.
+    /// Floating-point (HDR) values above 1.0 would be clipped, and other extra
+    /// channels (depth, spot colours, ...) are not written at all.
+    fits_png: bool,
+}
+
+/// The source can be opened; the facts from its image header.
+fn header_facts(path: &Path) -> Result<HeaderFacts, Stop> {
     File::open(path).map_err(|e| Stop::error(open_reason(&e)))?;
     let image = read_header(path).ok_or_else(|| Stop::error(READ_ERROR))?;
-    Ok(image.image_header().metadata.animation.is_some())
+    let metadata = &image.image_header().metadata;
+    let fits = |depth: BitDepth| matches!(depth, BitDepth::IntegerSample { bits_per_sample } if bits_per_sample <= 16);
+    Ok(HeaderFacts {
+        animated: metadata.animation.is_some(),
+        fits_png: fits(metadata.bit_depth)
+            && metadata
+                .ec_info
+                .iter()
+                .all(|ec| ec.is_alpha() && fits(ec.bit_depth)),
+    })
 }

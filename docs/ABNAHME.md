@@ -150,6 +150,10 @@ Erst wenn **alle** Haken oben gesetzt sind:
 - Mehrseitige TIFFs und Animationen (animierte GIFs): Es wird die erste Seite bzw. das erste
   Bild geprüft, deshalb bleiben **die Originale immer liegen**, auch bei eingeschaltetem
   Papierkorb.
+- Rückwandlung von Gleitkomma-JPEG-XL (HDR), Bildern mit mehr als 16 Bit oder mit
+  Zusatzkanälen außer Alpha: PNG/TIFF speichern höchstens 16 Bit ganzzahlig, Werte über 1,0
+  und Zusatzkanäle gehen verloren. Die `.jxl` bleibt deshalb **immer liegen** (Hinweis
+  „Gleitkomma- oder Mehrkanal-Bild – .jxl behalten“).
 - „Metadaten behalten“ aus: Auch die EXIF-Ausrichtung (Orientation) wird verworfen. Bilder,
   die nur über diese Angabe gedreht angezeigt wurden, erscheinen danach evtl. gedreht.
 - Nur Windows 11 (x64). Vorschaubilder für `.jxl` im Explorer liefert Windows nur mit

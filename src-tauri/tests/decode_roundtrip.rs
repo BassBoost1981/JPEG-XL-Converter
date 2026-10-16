@@ -429,3 +429,40 @@ fn corrupt_jbrd_box_gives_no_jpeg() {
     assert!(!target.exists());
     assert!(env.recycled().is_empty());
 }
+
+/// Little-endian RGB PFM (floating point, rows bottom to top) with values
+/// above 1.0, which a PNG cannot hold.
+fn write_float_pfm(path: &Path, w: u32, h: u32) {
+    let mut bytes = format!("PF\n{w} {h}\n-1.0\n").into_bytes();
+    for y in 0..h {
+        for x in 0..w {
+            for v in [x as f32 / w as f32 * 4.0, y as f32 / h as f32, 2.5] {
+                bytes.extend_from_slice(&v.to_le_bytes());
+            }
+        }
+    }
+    fs::write(path, bytes).unwrap();
+}
+
+#[test]
+fn float_jxl_is_kept() {
+    const NOTE_NOT_EXACT: &str = "Gleitkomma- oder Mehrkanal-Bild – .jxl behalten";
+    let env = Env::new();
+    let src = env.path("hdr.pfm");
+    write_float_pfm(&src, FIXTURE_W, FIXTURE_H);
+    let jxl = env.cjxl(&src, "hdr.jxl", &["-d", "0"]);
+
+    for format in [OutputFormat::Png, OutputFormat::Tiff] {
+        let (outcome, target) = env.decode(&jxl, &settings(format, true, true));
+        assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
+        assert_eq!(outcome.note.as_deref(), Some(NOTE_NOT_EXACT));
+        assert!(target.exists());
+        assert!(jxl.exists());
+        assert!(env.recycled().is_empty());
+        fs::remove_file(&target).unwrap();
+    }
+
+    // Without the recycle bin there is nothing to say.
+    let (outcome, target) = env.decode(&jxl, &settings(OutputFormat::Png, true, false));
+    assert_done(&outcome, &target);
+}
