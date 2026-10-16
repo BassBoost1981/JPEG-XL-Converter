@@ -12,16 +12,20 @@ Geprüft am 2026-10-16 unter Windows 11 (ANSI-Codepage 1252, `LongPathsEnabled =
   - `bin/cjxl.exe` → `src-tauri/binaries/cjxl-x86_64-pc-windows-msvc.exe`
   - `bin/djxl.exe` → `src-tauri/binaries/djxl-x86_64-pc-windows-msvc.exe`
   - `licenses/LICENSE.libjxl` → `src-tauri/binaries/LICENSE-libjxl`
+  - alle Dateien aus `licenses/` → `src-tauri/binaries/licenses-libjxl/` (Ruling R10)
 - Das Archiv ist mit **Deflate64** gepackt. Weder `Expand-Archive` (.NET Framework) noch
   `tar.exe` können das entpacken. Das Skript nimmt deshalb den ZIP-Ordner der Windows-Shell
-  (`Shell.Application`) und holt nur diese drei Einträge heraus. Für `cjxl.exe` ist geprüft,
-  dass das Ergebnis byte-gleich mit einer Entpackung durch 7-Zip ist.
+  (`Shell.Application`) und holt nur die benötigten Einträge heraus. Für `cjxl.exe` ist
+  geprüft, dass das Ergebnis byte-gleich mit einer Entpackung durch 7-Zip ist.
 - Ohne die Dateien in `src-tauri/binaries` bricht `cargo build` ab, weil `tauri-build` die
   Sidecars aus `bundle.externalBin` sucht. Also zuerst das Skript ausführen.
   `tauri-build` kopiert die beiden Programme bei jedem Build als `cjxl.exe`/`djxl.exe`
   nach `target/debug` bzw. `target/release`.
-- Im Archiv liegen unter `licenses/` noch weitere Lizenzen der fest eingebundenen
-  Bibliotheken: brotli, giflib, highway, libjpeg-turbo, libpng, libwebp, sjpeg, skcms, zlib.
+- Die statischen Programme enthalten auch brotli, giflib, highway, libjpeg-turbo, libpng,
+  libwebp, sjpeg, skcms und zlib. Deren Lizenztexte stehen im Archiv unter `licenses/` und
+  werden mit allen anderen Dateien aus diesem Ordner nach `licenses-libjxl/` kopiert, damit
+  sie mit ausgeliefert werden können. Der Ordner ist wie die Programme nicht eingecheckt
+  (`.gitignore`).
 
 ## Versionsausgabe
 
@@ -44,10 +48,12 @@ Aufruf immer `cjxl EINGABE AUSGABE [OPTIONEN...]` bzw. `djxl EINGABE AUSGABE [OP
 | Pixel als JPEG (djxl) | `--pixels_to_jpeg` (`-j`) | |
 | JPEG-Qualität (djxl) | `--jpeg_quality=92` (`-q 92`) | setzt `--pixels_to_jpeg` von selbst, Standard 95 |
 | Bittiefe der Ausgabe (djxl) | `--bits_per_sample=8` | Standard −1: hängt von Format und Eingabe ab (bis 16 Bit bei PNG) |
+| Ausgabeformat (djxl) | `--output_format=jpg` / `--output_format=png` | sonst entscheidet die Endung der Ausgabedatei |
 
-Die Erwartungswerte der Tests in `args.rs` stimmen mit der Hilfe überein und wurden nicht
-geändert. Für das Entfernen der Metadaten erzeugt `cjxl_args` die Paare
-`-x strip=exif` und `-x strip=xmp`.
+Die Schreibweisen in den Erwartungswerten der Tests in `args.rs` stimmen mit der Hilfe überein.
+Für das Entfernen der Metadaten erzeugt `cjxl_args` die Paare `-x strip=exif` und
+`-x strip=xmp`. Nach Ruling R9 hängt `djxl_args` zusätzlich immer `--output_format=…` an.
+Die Erwartungswerte in `djxl_targets` sind entsprechend erweitert.
 
 ## Versuche
 
@@ -110,17 +116,21 @@ Beide Programme können das:
 
 ### Weitere Beobachtungen
 
-- **EXR wird nicht unterstützt.** Laut Hilfe nimmt `cjxl` JXL, PPM, PNM, PFM, PAM, PGX, PNG,
-  APNG, GIF und JPEG an. Eine EXR-Datei (Float, 64 × 48, mit dem `image`-Crate erzeugt) endet
-  mit „Getting pixel data failed.“ und Exit-Code 1. Dieser Build enthält kein OpenEXR, und
-  `djxl` kann auch nicht nach `.exr` schreiben. Das widerspricht der Spezifikation
-  („EXR direkt per `cjxl`“).
-- **djxl wählt das Ausgabeformat nach der Dateiendung.** Bei `x.png.tmp` kommt
+- **EXR wird nicht unterstützt.** Das offizielle statische `cjxl` aus v0.12.0 kann EXR nicht
+  lesen. Laut Hilfe nimmt es JXL, PPM, PNM, PFM, PAM, PGX, PNG, APNG, GIF und JPEG an. Eine
+  EXR-Datei (Float, 64 × 48, mit dem `image`-Crate erzeugt) endet mit „Getting pixel data
+  failed.“ und Exit-Code 1. Dieser Build enthält kein OpenEXR, und `djxl` kann auch nicht
+  nach `.exr` schreiben. **Deshalb nimmt die App keine `.exr`-Dateien an** (Ruling R8). Es
+  gibt in `InputKind` keine Variante `Exr` und auch keinen Umweg über eine andere Umwandlung.
+  Damit ist die Spezifikation an dieser Stelle („EXR direkt per `cjxl`“) überholt.
+- **djxl wählt das Ausgabeformat sonst nach der Dateiendung.** Bei `x.png.tmp` kommt
   „can't decode to the file extension '.tmp'.“, bei `--reconstruct_jpeg` nach `x.jpg.tmp`
-  kommt „--reconstruct_jpeg requires output format to be JPEG.“. Mit
-  `--output_format=png` bzw. `--output_format=jpg` klappt es. Wer djxl in eine `.tmp`-Datei
-  schreiben lässt, muss diese Option ergänzen. `djxl_args` enthält sie nicht. `cjxl` schreibt
-  dagegen immer JXL, egal welche Endung.
+  kommt „--reconstruct_jpeg requires output format to be JPEG.“. Mit `--output_format=png`
+  bzw. `--output_format=jpg` (Schreibweise aus der djxl-Hilfe) klappt es. Deshalb hängt
+  `djxl_args` das Format immer an (Ruling R9): `--output_format=jpg` bei `ReconstructJpeg`
+  und `PixelsToJpeg`, `--output_format=png` bei `Png`. Der Test `djxl_writes_to_tmp_paths`
+  prüft das in `.tmp`-Dateien. `--reconstruct_jpeg --output_format=jpg` stellt das JPEG
+  weiterhin byte-gleich wieder her. `cjxl` schreibt dagegen immer JXL, egal welche Endung.
 - `cjxl` überschreibt eine vorhandene Ausgabedatei ohne Rückfrage.
 - Bei einem Fehler (z. B. abgeschnittenes JPEG: „EncodeImageJXL() failed.“) gibt es Exit-Code 1
   und keine Ausgabedatei. Bei Erfolg ist der Exit-Code 0.

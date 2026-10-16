@@ -14,6 +14,7 @@ dist-portable/
 # libjxl sidecars (downloaded by scripts/fetch-libjxl.ps1, never committed)
 src-tauri/binaries/*.exe
 src-tauri/binaries/LICENSE*
+src-tauri/binaries/licenses-libjxl/
 
 # Temporary files
 *.tmp

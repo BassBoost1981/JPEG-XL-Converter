@@ -15,13 +15,14 @@ pub enum Mode {
     Dec,
 }
 
+/// Supported input formats. EXR is not among them because the official
+/// libjxl v0.12.0 static cjxl cannot read it (Ruling R8, docs/libjxl-notes.md).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum InputKind {
     Jpeg,
     Png,
     Gif,
-    Exr,
     Tiff,
     Webp,
     Bmp,

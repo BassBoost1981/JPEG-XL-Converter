@@ -304,6 +304,54 @@ mod tests {
         assert!(!output.exists());
     }
 
+    fn decoded_dims(path: &Path, format: image::ImageFormat) -> (u32, u32) {
+        let img = image::load_from_memory_with_format(&fs::read(path).unwrap(), format).unwrap();
+        (img.width(), img.height())
+    }
+
+    #[test]
+    fn djxl_writes_to_tmp_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let jpg = dir.path().join("foto.jpg");
+        let jxl = dir.path().join("foto.jxl");
+        image::RgbImage::from_fn(64, 48, |x, y| {
+            image::Rgb([(x * 4) as u8, (y * 5) as u8, 128])
+        })
+        .save(&jpg)
+        .unwrap();
+        let t = tools();
+        let none = CancelToken::new();
+        let transcode = EncodeSettings {
+            distance: 0.0,
+            effort: 7,
+            transcode_jpeg: true,
+        };
+        t.run_cjxl(
+            &jpg,
+            &jxl,
+            &cjxl_args(InputKind::Jpeg, &transcode, true),
+            &none,
+        )
+        .unwrap();
+
+        let rec = dir.path().join("x.jpg.tmp");
+        t.run_djxl(&jxl, &rec, &djxl_args(DjxlTarget::ReconstructJpeg), &none)
+            .unwrap();
+        assert_eq!(fs::read(&rec).unwrap(), fs::read(&jpg).unwrap());
+
+        let pixels = dir.path().join("pixels.jpg.tmp");
+        let to_jpeg = djxl_args(DjxlTarget::PixelsToJpeg { quality: 92 });
+        t.run_djxl(&jxl, &pixels, &to_jpeg, &none).unwrap();
+        assert_eq!(decoded_dims(&pixels, image::ImageFormat::Jpeg), (64, 48));
+
+        let png = dir.path().join("x.png.tmp");
+        let to_png = djxl_args(DjxlTarget::Png {
+            reduce_to_8bit: false,
+        });
+        t.run_djxl(&jxl, &png, &to_png, &none).unwrap();
+        assert_eq!(decoded_dims(&png, image::ImageFormat::Png), (64, 48));
+    }
+
     #[test]
     fn paths_are_passed_in_extended_length_form() {
         assert_eq!(

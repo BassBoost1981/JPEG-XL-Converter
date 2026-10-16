@@ -37,8 +37,9 @@ pub fn cjxl_args(kind: InputKind, enc: &EncodeSettings, keep_metadata: bool) -> 
     a
 }
 
-/// Options for `djxl INPUT OUTPUT [OPTIONS...]`. djxl picks the output
-/// format from the OUTPUT extension (see docs/libjxl-notes.md).
+/// Options for `djxl INPUT OUTPUT [OPTIONS...]`. The output format is always
+/// given explicitly, because djxl otherwise picks it from the OUTPUT
+/// extension and fails on `.tmp` files (Ruling R9, docs/libjxl-notes.md).
 pub fn djxl_args(target: DjxlTarget) -> Vec<String> {
     let mut a = match target {
         DjxlTarget::ReconstructJpeg => vec!["--reconstruct_jpeg".to_string()],
@@ -55,6 +56,11 @@ pub fn djxl_args(target: DjxlTarget) -> Vec<String> {
             reduce_to_8bit: false,
         } => Vec::new(),
     };
+    let format = match target {
+        DjxlTarget::ReconstructJpeg | DjxlTarget::PixelsToJpeg { .. } => "jpg",
+        DjxlTarget::Png { .. } => "png",
+    };
+    a.push(format!("--output_format={format}"));
     a.push(format!("--num_threads={TOOL_THREADS}"));
     a
 }
@@ -126,23 +132,36 @@ mod tests {
     fn djxl_targets() {
         assert_eq!(
             djxl_args(DjxlTarget::ReconstructJpeg),
-            vec!["--reconstruct_jpeg", "--num_threads=2"]
+            vec![
+                "--reconstruct_jpeg",
+                "--output_format=jpg",
+                "--num_threads=2"
+            ]
         );
         assert_eq!(
             djxl_args(DjxlTarget::PixelsToJpeg { quality: 92 }),
-            vec!["--pixels_to_jpeg", "--jpeg_quality=92", "--num_threads=2"]
+            vec![
+                "--pixels_to_jpeg",
+                "--jpeg_quality=92",
+                "--output_format=jpg",
+                "--num_threads=2"
+            ]
         );
         assert_eq!(
             djxl_args(DjxlTarget::Png {
                 reduce_to_8bit: true
             }),
-            vec!["--bits_per_sample=8", "--num_threads=2"]
+            vec![
+                "--bits_per_sample=8",
+                "--output_format=png",
+                "--num_threads=2"
+            ]
         );
         assert_eq!(
             djxl_args(DjxlTarget::Png {
                 reduce_to_8bit: false
             }),
-            vec!["--num_threads=2"]
+            vec!["--output_format=png", "--num_threads=2"]
         );
     }
 }

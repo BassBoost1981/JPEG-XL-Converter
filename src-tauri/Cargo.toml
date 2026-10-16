@@ -33,5 +33,5 @@ panic = "abort"
 strip = true
 
 [dev-dependencies]
-image = { version = "0.25.10", default-features = false, features = ["png"] }
+image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 tempfile = "3.27.0"
