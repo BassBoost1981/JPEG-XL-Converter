@@ -68,10 +68,17 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// A PNG (RGB8 test pattern) with `chunks` written between IHDR and the image data.
 fn write_png_with(path: &Path, chunks: &[(&[u8; 4], Vec<u8>)]) {
+    write_png_as(path, png::ColorType::Rgb, chunks);
+}
+
+/// Like `write_png_with`, 8 bit, for the given colour type.
+fn write_png_as(path: &Path, color: png::ColorType, chunks: &[(&[u8; 4], Vec<u8>)]) {
     let (w, h) = (FIXTURE_W, FIXTURE_H);
-    let pixels: Vec<u8> = (0..w * h * 3).map(|i| (i * 7 % 251) as u8).collect();
+    let pixels: Vec<u8> = (0..w * h * color.samples() as u32)
+        .map(|i| (i * 7 % 251) as u8)
+        .collect();
     let mut encoder = png::Encoder::new(BufWriter::new(File::create(path).unwrap()), w, h);
-    encoder.set_color(png::ColorType::Rgb);
+    encoder.set_color(color);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().unwrap();
     for (kind, data) in chunks {
@@ -136,6 +143,8 @@ enum Extra {
     ExifPointer,
     Xmp,
     Iptc,
+    /// Any other tag, by number, with a dummy value.
+    Other(u16),
     Icc(Vec<u8>),
 }
 
@@ -156,6 +165,9 @@ fn write_tiff_with(path: &Path, extras: &[Extra]) {
                 .unwrap(),
             Extra::Iptc => directory
                 .write_tag(Tag::Unknown(33723), &b"IPTC-block"[..])
+                .unwrap(),
+            Extra::Other(number) => directory
+                .write_tag(Tag::from_u16_exhaustive(*number), 7u32)
                 .unwrap(),
             Extra::Icc(profile) => directory
                 .write_tag(Tag::IccProfile, profile.as_slice())
@@ -340,36 +352,106 @@ fn tiff16_to_png_keeps_16bit() {
 }
 
 #[test]
-fn float_tiff_becomes_16bit_png() {
+fn float_images_are_refused() {
+    // 16 bit would round the values, and nothing afterwards could notice.
     let dir = tempfile::tempdir().unwrap();
-    let tiff = dir.path().join("float.tif");
     let png = dir.path().join("float.png");
-    let float = Rgb32FImage::from_fn(FIXTURE_W, FIXTURE_H, |x, y| {
+    let rgb = Rgb32FImage::from_fn(FIXTURE_W, FIXTURE_H, |x, y| {
         image::Rgb([
             x as f32 / (FIXTURE_W - 1) as f32,
             y as f32 / (FIXTURE_H - 1) as f32,
             0.5,
         ])
     });
-    float.save_with_format(&tiff, ImageFormat::Tiff).unwrap();
-    assert_eq!(color_of(&tiff), ColorType::Rgb32F);
+    let rgba =
+        image::Rgba32FImage::from_pixel(FIXTURE_W, FIXTURE_H, image::Rgba([0.1, 0.2, 0.3, 0.4]));
+    for (name, image) in [
+        ("rgb", DynamicImage::ImageRgb32F(rgb)),
+        ("rgba", DynamicImage::ImageRgba32F(rgba)),
+    ] {
+        let tiff = dir.path().join(format!("{name}.tif"));
+        image.save_with_format(&tiff, ImageFormat::Tiff).unwrap();
+        assert!(matches!(
+            color_of(&tiff),
+            ColorType::Rgb32F | ColorType::Rgba32F
+        ));
 
-    to_png(&tiff, &png, true).unwrap();
+        let result = to_png(&tiff, &png, true);
 
-    assert_eq!(color_of(&png), ColorType::Rgb16);
-    let converted = open(&png).to_rgb16();
-    for (x, y, pixel) in converted.enumerate_pixels() {
-        let expected = float
-            .get_pixel(x, y)
-            .0
-            .map(|v| (v * 65535.0).round() as i32);
-        for (got, want) in pixel.0.iter().zip(expected) {
-            assert!(
-                (i32::from(*got) - want).abs() <= 1,
-                "({x},{y}): {got} vs {want}"
-            );
-        }
+        assert_eq!(
+            result,
+            Err("Gleitkomma-Bilder werden nicht unterstützt".to_string()),
+            "{name}"
+        );
+        assert!(!png.exists());
     }
+}
+
+#[test]
+fn cmyk_tiff_is_refused() {
+    // The image crate turns CMYK into RGB with a naive formula and drops K.
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("cmyk.png");
+    let cmyk8 = dir.path().join("cmyk8.tif");
+    let mut encoder = RawTiffEncoder::new(File::create(&cmyk8).unwrap()).unwrap();
+    let pixels: Vec<u8> = (0..FIXTURE_W * FIXTURE_H * 4)
+        .map(|i| (i % 251) as u8)
+        .collect();
+    encoder
+        .write_image::<colortype::CMYK8>(FIXTURE_W, FIXTURE_H, &pixels)
+        .unwrap();
+    drop(encoder);
+    let cmyk16 = dir.path().join("cmyk16.tif");
+    let mut encoder = RawTiffEncoder::new(File::create(&cmyk16).unwrap()).unwrap();
+    let pixels: Vec<u16> = (0..FIXTURE_W * FIXTURE_H * 4)
+        .map(|i| (i * 17 % 65521) as u16)
+        .collect();
+    encoder
+        .write_image::<colortype::CMYK16>(FIXTURE_W, FIXTURE_H, &pixels)
+        .unwrap();
+    drop(encoder);
+
+    for tiff in [cmyk8, cmyk16] {
+        // The image crate does read it, which is the trap.
+        assert!(image::open(&tiff).is_ok(), "{}", tiff.display());
+
+        let result = to_png(&tiff, &png, true);
+
+        assert_eq!(
+            result,
+            Err("CMYK-Bilder werden nicht unterstützt".to_string()),
+            "{}",
+            tiff.display()
+        );
+        assert!(!png.exists());
+    }
+}
+
+#[test]
+fn to_png_only_takes_tiff_webp_and_bmp() {
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("out.png");
+    let png = dir.path().join("a.png");
+    let jpg = dir.path().join("a.jpg");
+    common::write_png(&png, PngKind::Rgb8);
+    common::write_jpeg(&jpg, FIXTURE_W, FIXTURE_H, common::JpegOpts::default());
+    // Recognised by content: a TIFF named .png still counts, a PNG named .tif does not.
+    let tiff_as_png = dir.path().join("tiff.png");
+    let png_as_tiff = dir.path().join("png.tif");
+    common::write_tiff16(&tiff_as_png);
+    fs::copy(&png, &png_as_tiff).unwrap();
+
+    for refused in [&png, &jpg, &png_as_tiff] {
+        let result = to_png(refused, &out, true);
+        assert_eq!(
+            result,
+            Err("Format wird hier nicht unterstützt".to_string()),
+            "{}",
+            refused.display()
+        );
+    }
+    assert!(!out.exists());
+    assert!(to_png(&tiff_as_png, &out, true).is_ok());
 }
 
 #[test]
@@ -506,8 +588,9 @@ fn icc_profile_is_always_carried_into_the_png() {
 
 #[test]
 fn tiff_exif_that_cannot_be_carried_is_reported_lost() {
-    // The decoder cannot read EXIF out of a TIFF, so the first directory is checked
-    // for the tags that make up EXIF. XMP cannot be carried either.
+    // The decoder cannot read EXIF out of a TIFF, and the metadata tags of a TIFF are
+    // too many to list, so every tag of the first directory that does not just describe
+    // how the pixels are stored counts.
     let dir = tempfile::tempdir().unwrap();
     let cases = [
         (Extra::Make, Lost),
@@ -515,6 +598,21 @@ fn tiff_exif_that_cannot_be_carried_is_reported_lost() {
         (Extra::ExifPointer, Lost),
         (Extra::Xmp, Lost),
         (Extra::Iptc, Lost),
+        // Everything that is not about how the pixels are stored counts:
+        (Extra::Other(305), Lost),   // Software
+        (Extra::Other(316), Lost),   // HostComputer
+        (Extra::Other(269), Lost),   // DocumentName
+        (Extra::Other(285), Lost),   // PageName
+        (Extra::Other(330), Lost),   // SubIFDs
+        (Extra::Other(40091), Lost), // XPTitle
+        (Extra::Other(18246), Lost), // Rating
+        (Extra::Other(34377), Lost), // Photoshop image resources
+        (Extra::Other(37724), Lost), // ImageSourceData
+        // ... but tags about the storage do not:
+        (Extra::Other(282), NotPresent),     // XResolution
+        (Extra::Other(296), NotPresent),     // ResolutionUnit
+        (Extra::Other(266), NotPresent),     // FillOrder
+        (Extra::Other(254), NotPresent),     // NewSubfileType
         (Extra::Orientation(1), NotPresent), // "upright" is the default, nothing to lose
     ];
     for (extra, expected) in cases {
@@ -532,6 +630,30 @@ fn tiff_exif_that_cannot_be_carried_is_reported_lost() {
             NotPresent,
             "{extra:?}"
         );
+    }
+}
+
+#[test]
+fn tiff_colour_tags_without_a_profile_are_reported_as_lost_icc() {
+    // TransferFunction, WhitePoint, PrimaryChromaticities: a colour description that
+    // the PNG does not get. Colour, not metadata, so it counts with metadata off, too.
+    let dir = tempfile::tempdir().unwrap();
+    for number in [301, 318, 319] {
+        let tiff = dir.path().join("a.tif");
+        write_tiff_with(&tiff, &[Extra::Other(number)]);
+
+        for keep_metadata in [true, false] {
+            let png = dir.path().join("a.png");
+            let transfer = to_png(&tiff, &png, keep_metadata).unwrap();
+
+            assert_eq!(
+                transfer,
+                meta(NotPresent, Lost),
+                "tag {number} keep {keep_metadata}"
+            );
+            assert!(!transfer.complete());
+            fs::remove_file(&png).unwrap();
+        }
     }
 }
 
@@ -822,6 +944,47 @@ fn icc_chunk_that_cannot_be_read_is_lost_in_tiff() {
 }
 
 #[test]
+fn gray_png_keeps_its_profile_in_the_tiff_but_gray_alpha_cannot() {
+    // Gray stays gray in a TIFF, so a gray profile still fits. Gray + alpha has to be
+    // widened to RGBA, and a gray profile on RGB data would be wrong.
+    let dir = tempfile::tempdir().unwrap();
+    let profile = iccp_chunk(&icc_blob());
+    for (name, color, expected) in [
+        ("gray", png::ColorType::Grayscale, Transferred),
+        ("gray-alpha", png::ColorType::GrayscaleAlpha, Lost),
+    ] {
+        let png = dir.path().join(format!("{name}.png"));
+        let tiff = dir.path().join(format!("{name}.tif"));
+        write_png_as(&png, color, &[(b"iCCP", profile.clone())]);
+
+        let transfer = from_png(&png, &tiff, OutputFormat::Tiff, true).unwrap();
+
+        assert_eq!(transfer.icc, expected, "{name}");
+        let written = tiff_icc(&tiff);
+        assert_eq!(written, (expected == Transferred).then(icc_blob), "{name}");
+        assert!(same_pixels(&open(&png), &open(&tiff)), "{name}");
+    }
+}
+
+#[test]
+fn animated_png_reports_the_frames_it_drops() {
+    // acTL carries the number of frames (APNG). A single-frame APNG loses nothing.
+    let dir = tempfile::tempdir().unwrap();
+    let out = dir.path().join("a.out");
+    for (frames, expected) in [(1u32, NotPresent), (2, Lost), (10, Lost)] {
+        let png = dir.path().join("a.png");
+        let animation_control = [frames.to_be_bytes(), 0u32.to_be_bytes()].concat();
+        write_png_with(&png, &[(b"acTL", animation_control)]);
+
+        for format in [OutputFormat::Tiff, OutputFormat::Webp] {
+            let transfer = from_png(&png, &out, format, true).unwrap();
+            assert_eq!(transfer.frames, expected, "{frames} frames, {format:?}");
+            assert_eq!(transfer.complete(), expected != Lost);
+        }
+    }
+}
+
+#[test]
 fn metadata_off_reports_exif_as_not_present() {
     let dir = tempfile::tempdir().unwrap();
     let png = dir.path().join("a.png");
@@ -1022,15 +1185,51 @@ fn write_huge_png(path: &Path) {
     writer.write_chunk(ChunkType(*b"IEND"), &[]).unwrap();
 }
 
+/// A TIFF whose header says 100000 x 100000 gray 16 bit (20 GB decoded); the
+/// strip is 8 junk bytes.
+fn write_huge_tiff(path: &Path) {
+    const SIDE: u32 = 100_000;
+    const DIRECTORY_AT: u32 = 8;
+    const ENTRIES: u16 = 9;
+    const SHORT: u16 = 3;
+    const LONG: u16 = 4;
+    let data_at = DIRECTORY_AT + 2 + 12 * u32::from(ENTRIES) + 4;
+    let entries: [(u16, u16, u32); ENTRIES as usize] = [
+        (256, LONG, SIDE),    // ImageWidth
+        (257, LONG, SIDE),    // ImageLength
+        (258, SHORT, 16),     // BitsPerSample
+        (259, SHORT, 1),      // Compression: none
+        (262, SHORT, 1),      // Photometric: black is zero
+        (273, LONG, data_at), // StripOffsets
+        (277, SHORT, 1),      // SamplesPerPixel
+        (278, LONG, SIDE),    // RowsPerStrip
+        (279, LONG, 8),       // StripByteCounts
+    ];
+    let mut bytes = b"II*\0".to_vec();
+    bytes.extend(DIRECTORY_AT.to_le_bytes());
+    bytes.extend(ENTRIES.to_le_bytes());
+    for (tag, kind, value) in entries {
+        bytes.extend(tag.to_le_bytes());
+        bytes.extend(kind.to_le_bytes());
+        bytes.extend(1u32.to_le_bytes());
+        bytes.extend(value.to_le_bytes());
+    }
+    bytes.extend([0u8; 4]); // no next directory
+    bytes.extend([0u8; 8]);
+    fs::write(path, bytes).unwrap();
+}
+
 #[test]
 fn huge_image_is_refused_before_it_is_decoded() {
     let dir = tempfile::tempdir().unwrap();
     let png = dir.path().join("huge.png");
+    let tiff = dir.path().join("huge.tif");
     let out = dir.path().join("huge.out");
     write_huge_png(&png);
+    write_huge_tiff(&tiff);
     let too_big = Err("Bild ist zu groß zum Umwandeln".to_string());
 
-    assert_eq!(to_png(&png, &out, true), too_big);
+    assert_eq!(to_png(&tiff, &out, true), too_big);
     assert_eq!(from_png(&png, &out, OutputFormat::Tiff, true), too_big);
     assert!(!out.exists());
 }
@@ -1223,11 +1422,12 @@ fn strip_png_metadata_that_cannot_replace_the_file_cleans_up() {
 
 // ----------------------------------------------------------- end to end
 
-/// Lossless cjxl then djxl: `png` -> `.jxl` -> PNG, all next to `png`. Returns the PNG
-/// that djxl wrote. cjxl gets no strip options, so only what is in `png` can reach it.
-fn through_cjxl_and_djxl(png: &Path) -> std::path::PathBuf {
-    let jxl = png.with_extension("jxl");
-    let back = png.with_file_name("back.png");
+/// Lossless cjxl then djxl: `input` (anything cjxl reads) -> `.jxl` -> PNG, all next to
+/// it. Returns the PNG that djxl wrote. cjxl gets no strip options, so only what is in
+/// the input can reach it.
+fn through_cjxl_and_djxl(input: &Path) -> std::path::PathBuf {
+    let jxl = input.with_extension("jxl");
+    let back = input.with_file_name("back.png");
     let tools = common::tools();
     let cancel = CancelToken::new();
     let settings = EncodeSettings {
@@ -1237,7 +1437,7 @@ fn through_cjxl_and_djxl(png: &Path) -> std::path::PathBuf {
     };
     tools
         .run_cjxl(
-            png,
+            input,
             &jxl,
             &cjxl_args(InputKind::Webp, &settings, true),
             &cancel,
@@ -1299,4 +1499,43 @@ fn tiff_icc_profile_survives_cjxl_and_djxl() {
 
     assert_eq!(icc_of(&back), Some(icc));
     assert!(same_pixels(&open(&tiff), &open(&back)));
+}
+
+/// A GIF with `frames` frames that differ from each other. The frames get a delay:
+/// djxl leaves out frames that last 0 ms.
+fn write_animated_gif(path: &Path, frames: u8) {
+    let frames: Vec<image::Frame> = (0..frames)
+        .map(|i| {
+            let picture = image::RgbaImage::from_fn(FIXTURE_W, FIXTURE_H, |x, y| {
+                image::Rgba([(x * 4) as u8, (y * 5) as u8, (90 * u32::from(i)) as u8, 255])
+            });
+            let delay = image::Delay::from_numer_denom_ms(100, 1);
+            image::Frame::from_parts(picture, 0, 0, delay)
+        })
+        .collect();
+    let mut encoder = image::codecs::gif::GifEncoder::new(File::create(path).unwrap());
+    encoder.encode_frames(frames).unwrap();
+}
+
+#[test]
+fn animated_jxl_becomes_an_animated_png_and_its_extra_frames_are_reported_lost() {
+    // The real chain: GIF -> cjxl -> JXL animation -> djxl -> PNG -> TIFF.
+    let dir = tempfile::tempdir().unwrap();
+    let gif = dir.path().join("anim.gif");
+    let tiff = dir.path().join("anim.tif");
+    write_animated_gif(&gif, 2);
+
+    let apng = through_cjxl_and_djxl(&gif);
+    let names = chunk_names(&apng);
+    assert!(
+        names.contains(&"acTL".to_string()),
+        "djxl wrote no APNG: {names:?}"
+    );
+
+    let transfer = from_png(&apng, &tiff, OutputFormat::Tiff, true).unwrap();
+
+    assert_eq!(transfer.frames, Lost);
+    assert!(!transfer.complete());
+    let first = open(&tiff);
+    assert_eq!((first.width(), first.height()), (FIXTURE_W, FIXTURE_H));
 }

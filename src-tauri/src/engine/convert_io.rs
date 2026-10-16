@@ -22,8 +22,8 @@ use std::path::Path;
 use image::codecs::png::{CompressionType, FilterType, PngEncoder};
 use image::codecs::tiff::TiffEncoder;
 use image::{
-    ColorType, DynamicImage, ImageDecoder, ImageEncoder, ImageError, ImageFormat, ImageReader,
-    Limits,
+    ColorType, DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageError,
+    ImageFormat, ImageReader, Limits,
 };
 use tiff::tags::Tag;
 
@@ -64,6 +64,9 @@ const WRITE_ERROR: &str = "Datei lässt sich nicht schreiben";
 const EDIT_ERROR: &str = "Datei lässt sich nicht bearbeiten";
 const TOO_BIG_ERROR: &str = "Bild ist zu groß zum Umwandeln";
 const FORMAT_ERROR: &str = "Ausgabeformat wird nicht unterstützt";
+const SOURCE_FORMAT_ERROR: &str = "Format wird hier nicht unterstützt";
+const CMYK_ERROR: &str = "CMYK-Bilder werden nicht unterstützt";
+const FLOAT_ERROR: &str = "Gleitkomma-Bilder werden nicht unterstützt";
 
 /// Largest decoded image accepted. The image crate's default of 512 MiB would
 /// turn away big 16-bit scans.
@@ -83,8 +86,12 @@ fn lost(present: bool) -> MetaState {
     }
 }
 
-/// Converts a TIFF, WebP or BMP (any format the image crate reads) to a PNG
-/// that cjxl can take. 16-bit stays 16-bit, float becomes 16-bit.
+/// Converts a TIFF, WebP or BMP (recognised by content, not by extension) to a
+/// PNG that cjxl can take. 8 and 16 bit stay as they are. Anything the PNG
+/// cannot hold without changing the pixels is refused with a German error
+/// instead: any other file format, CMYK images (the image crate converts them
+/// to RGB by a naive formula and drops the K channel) and float images (16 bit
+/// would round them).
 ///
 /// ICC profile: carried when the source has one, whatever `keep_metadata` says.
 /// EXIF, XMP and IPTC: only looked at when `keep_metadata` is set (otherwise
@@ -107,7 +114,21 @@ fn lost(present: bool) -> MetaState {
 pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTransfer, String> {
     let reader = open_reader(src)?;
     let format = reader.format();
+    match format {
+        Some(ImageFormat::Tiff | ImageFormat::WebP | ImageFormat::Bmp) => {}
+        Some(_) => return Err(SOURCE_FORMAT_ERROR.to_string()),
+        None => return Err(READ_ERROR.to_string()),
+    }
     let mut decoder = decoder_for(reader)?;
+    if matches!(
+        decoder.original_color_type(),
+        ExtendedColorType::Cmyk8 | ExtendedColorType::Cmyk16
+    ) {
+        return Err(CMYK_ERROR.to_string());
+    }
+    if matches!(decoder.color_type(), ColorType::Rgb32F | ColorType::Rgba32F) {
+        return Err(FLOAT_ERROR.to_string());
+    }
     let mut meta = if format == Some(ImageFormat::Tiff) {
         tiff_metadata(src, keep_metadata)?
     } else {
@@ -138,7 +159,7 @@ pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTra
         MetaState::NotPresent
     };
 
-    write_png(&integer_image(image), dst_png, meta.icc, meta.exif)?;
+    write_png(&image, dst_png, meta.icc, meta.exif)?;
     Ok(MetaTransfer {
         exif: exif_state,
         icc: icc_state,
@@ -149,11 +170,13 @@ pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTra
 /// Converts the PNG djxl wrote to TIFF (lossless) or WebP (lossy, quality 90).
 /// Other formats are refused.
 ///
-/// The TIFF takes the ICC profile along (`Transferred`; `Lost` only if the PNG
-/// has an `iCCP` chunk that cannot be read). Neither output carries EXIF or XMP,
-/// so these are `Lost` if the PNG has them and the user did not switch metadata
-/// off; WebP does not carry the ICC profile either. `frames` is always
-/// `NotPresent`: a PNG from djxl has one image.
+/// The TIFF takes the ICC profile along (`Transferred`). It is `Lost` if the PNG
+/// has an `iCCP` chunk that cannot be read, and for gray + alpha images, which
+/// the TIFF writer widens to RGBA, where a gray profile would not fit. Neither
+/// output carries EXIF or XMP, so these are `Lost` if the PNG has them and the
+/// user did not switch metadata off; WebP does not carry the ICC profile either.
+/// Only the first image is converted: an animated PNG (djxl writes one for an
+/// animated JXL) makes `frames` `Lost`.
 ///
 /// A failed conversion leaves no output file behind.
 pub fn from_png(
@@ -171,9 +194,7 @@ pub fn from_png(
     let image = DynamicImage::from_decoder(decoder).map_err(|e| image_error(&e))?;
 
     let icc_state = if format == OutputFormat::Tiff {
-        let carried = icc.is_some();
-        write_tiff(image, icc, dst)?;
-        if carried {
+        if write_tiff(image, icc, dst)? {
             MetaState::Transferred
         } else {
             lost(found.icc)
@@ -185,7 +206,7 @@ pub fn from_png(
     Ok(MetaTransfer {
         exif: lost(keep_metadata && (found.exif || found.xmp)),
         icc: icc_state,
-        frames: MetaState::NotPresent,
+        frames: lost(found.animated),
     })
 }
 
@@ -295,34 +316,64 @@ fn decoder_metadata(
     Ok(meta)
 }
 
+/// Tags of a TIFF directory that only describe how the pixels are stored. Every
+/// tag that is not on this list (and not the ICC profile, the orientation or a
+/// colour tag, which are handled on their own) is metadata we do not carry:
+/// camera data, software, dates, XMP, IPTC, Photoshop resources, GeoTIFF, ...
+const STRUCTURE_TAGS: [Tag; 34] = [
+    Tag::NewSubfileType,
+    Tag::SubfileType,
+    Tag::ImageWidth,
+    Tag::ImageLength,
+    Tag::BitsPerSample,
+    Tag::Compression,
+    Tag::PhotometricInterpretation,
+    Tag::Threshholding,
+    Tag::CellWidth,
+    Tag::CellLength,
+    Tag::FillOrder,
+    Tag::StripOffsets,
+    Tag::SamplesPerPixel,
+    Tag::RowsPerStrip,
+    Tag::StripByteCounts,
+    Tag::MinSampleValue,
+    Tag::MaxSampleValue,
+    Tag::XResolution,
+    Tag::YResolution,
+    Tag::PlanarConfiguration,
+    Tag::ResolutionUnit,
+    Tag::Predictor,
+    Tag::ColorMap,
+    Tag::TileWidth,
+    Tag::TileLength,
+    Tag::TileOffsets,
+    Tag::TileByteCounts,
+    Tag::ExtraSamples,
+    Tag::SampleFormat,
+    Tag::SMinSampleValue,
+    Tag::SMaxSampleValue,
+    Tag::JPEGTables,
+    Tag::ChromaSubsampling,
+    Tag::ChromaPositioning,
+];
+
+/// TransferFunction, WhitePoint and PrimaryChromaticities: a colour description
+/// without an ICC profile. Dropping them changes how the colours look.
+const COLOUR_TAGS: [u16; 3] = [301, 318, 319];
+
 /// The metadata of a TIFF, read with the tiff crate itself. The image crate's
 /// TIFF decoder is no use here: it sizes the limit for tag values by the pixel
 /// data, so on a small image it silently drops the ICC profile and fails on an
 /// XMP packet.
 ///
-/// A TIFF keeps EXIF as tags of its first directory, not as a block we could
-/// copy. They count as EXIF when the directory has a pointer to the EXIF or GPS
-/// directory or one of the descriptive tags a camera or editor writes (an
-/// orientation of 1, "upright", is the default and does not count). An XMP
-/// packet or IPTC block counts as well. Then the metadata is uncarried. A tag
-/// that exists but cannot be read counts as present.
+/// A TIFF keeps EXIF and the like as tags of its first directory, not as a block
+/// we could copy, and there are far more of them than anyone could list. So the
+/// check is turned around: every tag of the directory is looked at (the entry
+/// table only, no values), and anything except `STRUCTURE_TAGS`, the ICC
+/// profile, an orientation of 1 ("upright", the default) and the colour tags
+/// counts as descriptive metadata, which is then uncarried. The colour tags make
+/// the colour profile uncarried whatever `keep_metadata` says.
 fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String> {
-    const EXIF_TAGS: [Tag; 8] = [
-        Tag::ExifDirectory,
-        Tag::GpsDirectory,
-        Tag::ImageDescription,
-        Tag::Make,
-        Tag::Model,
-        Tag::DateTime,
-        Tag::Artist,
-        Tag::Copyright,
-    ];
-    const XMP_TAG: Tag = Tag::Unknown(700);
-    const IPTC_TAG: Tag = Tag::Unknown(33723);
-    fn present<T>(found: Result<Option<T>, tiff::TiffError>) -> bool {
-        !matches!(found, Ok(None))
-    }
-
     let file = File::open(path).map_err(|_| OPEN_ERROR.to_string())?;
     let mut decoder =
         tiff::decoder::Decoder::new(BufReader::new(file)).map_err(|_| READ_ERROR.to_string())?;
@@ -336,18 +387,28 @@ fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String>
         more_frames: decoder.more_images(),
         ..SourceMeta::default()
     };
-    if keep_metadata {
-        let rotated = match decoder.find_tag(Tag::Orientation) {
-            Ok(None) => false,
-            Ok(Some(value)) => value.into_u16().map_or(true, |o| o != 1),
-            Err(_) => true,
-        };
-        meta.uncarried = rotated
-            || present(decoder.find_tag(XMP_TAG))
-            || present(decoder.find_tag(IPTC_TAG))
-            || EXIF_TAGS
-                .into_iter()
-                .any(|tag| present(decoder.find_tag(tag)));
+
+    let tags: Vec<Tag> = decoder
+        .image_ifd()
+        .directory()
+        .iter()
+        .map(|(tag, _)| tag)
+        .collect();
+    for tag in tags {
+        if tag == Tag::IccProfile || STRUCTURE_TAGS.contains(&tag) {
+            continue;
+        }
+        if COLOUR_TAGS.contains(&tag.to_u16()) {
+            meta.icc_uncarried = true;
+        } else if tag == Tag::Orientation {
+            let rotated = match decoder.find_tag(Tag::Orientation) {
+                Ok(Some(value)) => value.into_u16().map_or(true, |o| o != 1),
+                _ => true,
+            };
+            meta.uncarried |= keep_metadata && rotated;
+        } else {
+            meta.uncarried |= keep_metadata;
+        }
     }
     Ok(meta)
 }
@@ -430,15 +491,6 @@ fn write_file(
     result
 }
 
-/// PNG and TIFF output take 8 and 16 bit integers; float becomes 16 bit.
-fn integer_image(image: DynamicImage) -> DynamicImage {
-    match image.color() {
-        ColorType::Rgb32F => image.to_rgb16().into(),
-        ColorType::Rgba32F => image.to_rgba16().into(),
-        _ => image,
-    }
-}
-
 /// `eXIf` comes before the image data, where cjxl looks for it, and after `iCCP`.
 fn write_png(
     image: &DynamicImage,
@@ -466,13 +518,16 @@ fn write_png(
     })
 }
 
-fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<(), String> {
-    // The TIFF encoder has no gray + alpha.
-    let image = match image.color() {
-        ColorType::La8 => image.to_rgba8().into(),
-        ColorType::La16 => image.to_rgba16().into(),
-        _ => image,
+/// Writes a lossless TIFF. Returns whether the ICC profile went into it.
+fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<bool, String> {
+    // The TIFF encoder has no gray + alpha, so that becomes RGBA. A profile for
+    // gray data does not fit RGB data, so it is not written then.
+    let (image, icc) = match image.color() {
+        ColorType::La8 => (image.to_rgba8().into(), None),
+        ColorType::La16 => (image.to_rgba16().into(), None),
+        _ => (image, icc),
     };
+    let carried = icc.is_some();
     write_file(dst, |out| {
         let mut encoder = TiffEncoder::new(out);
         if let Some(icc) = icc {
@@ -483,7 +538,8 @@ fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<(
         image
             .write_with_encoder(encoder)
             .map_err(|_| WRITE_ERROR.to_string())
-    })
+    })?;
+    Ok(carried)
 }
 
 fn write_webp(image: DynamicImage, dst: &Path) -> Result<(), String> {
@@ -524,6 +580,8 @@ struct PngMeta {
     exif: bool,
     xmp: bool,
     icc: bool,
+    /// An animated PNG (APNG) with more than one frame.
+    animated: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -533,7 +591,8 @@ enum Payload {
 }
 
 /// The start of a chunk: its 8-byte header and, for the types that can carry
-/// EXIF or XMP, the first bytes of its data (where the keyword is).
+/// EXIF or XMP (keyword first) and for the animation control chunk, the first
+/// bytes of its data.
 struct ChunkStart {
     header: [u8; 8],
     head: Vec<u8>,
@@ -577,7 +636,10 @@ fn read_chunk_start(input: &mut impl Read) -> io::Result<ChunkStart> {
         return Err(io::ErrorKind::InvalidData.into());
     }
     let mut head = Vec::new();
-    if matches!(&header[4..], b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt") {
+    if matches!(
+        &header[4..],
+        b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"acTL"
+    ) {
         head = vec![0; (len as usize).min(KEYWORD_WINDOW)];
         input.read_exact(&mut head)?;
     }
@@ -608,6 +670,14 @@ fn scan(input: &mut BufReader<File>) -> io::Result<PngMeta> {
         match (&chunk.kind(), chunk.payload()) {
             (b"IEND", _) => return Ok(found),
             (b"iCCP", _) => found.icc = true,
+            // Animation control: the number of frames, 4 bytes, comes first.
+            (b"acTL", _) => {
+                let frames = chunk
+                    .head
+                    .first_chunk::<4>()
+                    .map(|b| u32::from_be_bytes(*b));
+                found.animated = frames > Some(1);
+            }
             (_, Some(Payload::Exif)) => found.exif = true,
             (_, Some(Payload::Xmp)) => found.xmp = true,
             _ => {}
