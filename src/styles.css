@@ -1,6 +1,16 @@
 @import "tailwindcss";
 @import "@heroui/styles";
+@custom-variant dark (&:where(.dark, .dark *));
 @theme { --font-sans: "Lexend Variable", ui-sans-serif, system-ui, sans-serif; }
-:root, .light { --accent: #006FEE; --accent-foreground: #ffffff; }
-.dark { --accent: #338ef7; --accent-foreground: #ffffff; }
-body { font-variant-numeric: tabular-nums; }
+:root, .light {
+  --accent: #006FEE; --accent-foreground: #ffffff;
+  --app-bg: #fafafa; --card: #ffffff; --line: #f0f0f2; --muted: #71717a; --fg: #11181C;
+  --card-shadow: 0 0 5px rgba(0,0,0,.02), 0 2px 10px rgba(0,0,0,.06), 0 0 1px rgba(0,0,0,.3);
+}
+.dark {
+  --accent: #338ef7; --accent-foreground: #ffffff;
+  --app-bg: #000000; --card: #18181b; --line: #27272a; --muted: #a1a1aa; --fg: #ECEDEE;
+  --card-shadow: none;
+}
+html, body, #root { height: 100%; margin: 0; }
+body { font-variant-numeric: tabular-nums; background: var(--app-bg); color: var(--fg); font-size: 14px; overflow: hidden; }
