@@ -70,7 +70,9 @@ export const useApp = create<AppState>()((set, get) => ({
           run: st.run === "finished" && fresh.length > 0 ? "idle" : st.run,
           notice:
             rejected > 0
-              ? `${rejected} ${rejected === 1 ? "Datei wurde" : "Dateien wurden"} nicht hinzugefügt (nicht unterstütztes Format).`
+              ? rejected === 1
+                ? "1 Datei passt nicht zu diesem Modus und wurde nicht aufgenommen."
+                : `${rejected} Dateien passen nicht zu diesem Modus und wurden nicht aufgenommen.`
               : st.notice,
         };
       });
