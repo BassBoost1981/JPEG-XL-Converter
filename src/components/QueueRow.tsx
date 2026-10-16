@@ -5,7 +5,8 @@ import type { ItemStatus } from "../api/types";
 import { formatDelta, formatSize } from "../lib/format";
 import type { Row } from "../state/store";
 
-export const ROW_HEIGHT = 54;
+// 54 px row + 2 px gap, as in the design.
+export const ROW_HEIGHT = 56;
 export const GRID_COLUMNS = "40px minmax(0,1fr) 80px 80px 72px 110px";
 
 // One lookup per item id, failures included: scrolling back never asks the backend again.
@@ -90,9 +91,9 @@ interface Look {
   bg: string;
 }
 
-const GREY = { color: "var(--muted)", bg: "color-mix(in srgb, var(--muted) 15%, transparent)" };
-const BLUE = { color: "var(--accent)", bg: "color-mix(in srgb, var(--accent) 15%, transparent)" };
-const GREEN = { color: "#17c964", bg: "color-mix(in srgb, #17c964 15%, transparent)" };
+const GREY = { color: "var(--muted)", bg: "var(--d100)" };
+const BLUE = { color: "var(--run)", bg: "var(--run-bg)" };
+const GREEN = { color: "var(--good)", bg: "var(--good-bg)" };
 const RED = { color: "#f31260", bg: "color-mix(in srgb, #f31260 15%, transparent)" };
 
 function look(status: ItemStatus, progress: number): Look {
@@ -127,7 +128,7 @@ function StatusChip({ row }: { row: Row }) {
   const l = look(row.status, row.progress);
   const chip = (
     <span
-      className="inline-flex items-center gap-1 self-start rounded-full px-2 text-xs"
+      className="inline-flex items-center gap-1 self-start rounded-full px-2 py-px text-xs"
       style={{ background: l.bg, color: l.color }}
     >
       {l.label}
@@ -168,7 +169,7 @@ export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect 
   const l = look(row.status, row.progress);
   const barWidth = row.status === "waiting" ? 0 : row.status === "running" ? row.progress : 100;
   const smaller = out !== null && out < entry.size;
-  const deltaLook = smaller ? GREEN : GREY;
+  const deltaLook = smaller ? { color: "var(--good-fg)", bg: "var(--good-bg)" } : GREY;
 
   return (
     <div
@@ -182,7 +183,8 @@ export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect 
         style={{
           gridTemplateColumns: GRID_COLUMNS,
           height: ROW_HEIGHT - 2,
-          background: selected ? "color-mix(in srgb, var(--accent) 12%, transparent)" : undefined,
+          marginTop: 2,
+          background: selected ? "var(--sel-bg)" : undefined,
         }}
       >
         <div
@@ -190,7 +192,7 @@ export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect 
           style={{
             background: thumb
               ? `center / cover no-repeat url("${thumb}")`
-              : "repeating-linear-gradient(135deg, var(--line) 0 4px, transparent 4px 8px)",
+              : "repeating-linear-gradient(135deg, var(--stripe-a) 0 4px, var(--stripe-b) 4px 8px)",
           }}
         >
           {!thumb && <span className="text-[8px] font-semibold text-[var(--muted)]">{extension(name)}</span>}
@@ -204,10 +206,10 @@ export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect 
         <span className="text-[13px]">{formatSize(entry.size)}</span>
         <span className="text-[13px]">{out === null ? "—" : formatSize(out)}</span>
         {out === null ? (
-          <span className="text-[13px]">—</span>
+          <span className="justify-self-start rounded-full px-2 py-0.5 text-xs font-medium text-[var(--muted)]">—</span>
         ) : (
           <span
-            className="justify-self-start rounded-full px-2 text-xs font-medium"
+            className="justify-self-start rounded-full px-2 py-0.5 text-xs font-medium"
             style={{ background: deltaLook.bg, color: deltaLook.color }}
           >
             {formatDelta(entry.size, out)}
@@ -215,7 +217,7 @@ export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect 
         )}
         <div className="flex flex-col gap-[5px]">
           <StatusChip row={row} />
-          <div className="h-1 overflow-hidden rounded-full bg-[var(--line)]">
+          <div className="h-1 overflow-hidden rounded-full bg-[var(--d200)]">
             <div className="h-full rounded-full" style={{ width: `${barWidth}%`, background: l.color }} />
           </div>
         </div>

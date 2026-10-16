@@ -1,16 +1,61 @@
 @import "tailwindcss";
 @import "@heroui/styles";
 @custom-variant dark (&:where(.dark, .dark *));
-@theme { --font-sans: "Lexend Variable", ui-sans-serif, system-ui, sans-serif; }
+@theme {
+  --font-sans: "Lexend Variable", ui-sans-serif, system-ui, sans-serif;
+  /* The design uses the font's natural line height everywhere. */
+  --text-xs--line-height: normal;
+  --text-sm--line-height: normal;
+  --text-base--line-height: normal;
+}
+/* Colour tokens of the design (docs/design/jpeg-xl-konverter.dc.html, variant 2a HeroUI). */
 :root, .light {
   --accent: #006FEE; --accent-foreground: #ffffff;
   --app-bg: #fafafa; --card: #ffffff; --line: #f0f0f2; --muted: #71717a; --fg: #11181C;
+  --d100: #f4f4f5; --d200: #e4e4e7;
   --card-shadow: 0 0 5px rgba(0,0,0,.02), 0 2px 10px rgba(0,0,0,.06), 0 0 1px rgba(0,0,0,.3);
+  --sel-bg: #e6f1fe; --info-bg: #e6f1fe; --info-fg: #004493;
+  --opt-sub-on: #006FEE; --run: #006FEE; --run-bg: #e6f1fe;
+  --good: #12a150; --good-bg: #e8faf0; --good-fg: #0e793c;
+  --stripe-a: #ececee; --stripe-b: #f4f4f5; --overlay: rgba(255,255,255,.9); --seg-bg: #ffffff;
 }
 .dark {
-  --accent: #338ef7; --accent-foreground: #ffffff;
+  --accent: #006FEE; --accent-foreground: #ffffff;
   --app-bg: #000000; --card: #18181b; --line: #27272a; --muted: #a1a1aa; --fg: #ECEDEE;
+  --d100: #27272a; --d200: #3f3f46;
   --card-shadow: none;
+  --sel-bg: #0b2440; --info-bg: #0b2440; --info-fg: #99c7fb;
+  --opt-sub-on: #66aaf9; --run: #338ef7; --run-bg: #0b2440;
+  --good: #17c964; --good-bg: #0d2d1c; --good-fg: #45d483;
+  --stripe-a: #202023; --stripe-b: #26262a; --overlay: rgba(0,0,0,.65); --seg-bg: #3f3f46;
 }
 html, body, #root { height: 100%; margin: 0; }
-body { font-variant-numeric: tabular-nums; background: var(--app-bg); color: var(--fg); font-size: 14px; overflow: hidden; }
+body { font-variant-numeric: tabular-nums; background: var(--app-bg); color: var(--fg); font-size: 14px; line-height: normal; overflow: hidden; }
+
+/* Switches as in the design: 44 × 24 track, 18 px round thumb. */
+.switch { --switch-control-bg: var(--d200); }
+.switch__control { width: 44px; height: 24px; border-radius: 12px; }
+.switch__thumb {
+  width: 18px; height: 18px; border-radius: 50%; margin-inline-start: 3px;
+  box-shadow: 0 1px 3px rgba(0,0,0,.25);
+}
+.switch[aria-checked="true"] .switch__thumb,
+.switch[data-selected="true"] .switch__thumb { margin-inline-start: 23px; box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+
+/* Mode tabs as in the design: segmented control, 12 px outer / 8 px inner radius. */
+.tabs__list-container { border-radius: 12px; background: var(--d100); }
+.tabs__list { gap: 2px; }
+.tabs__tab { border-radius: 8px; font-weight: 400; }
+.tabs__tab[data-selected="true"] { color: var(--fg); }
+.tabs__indicator { border-radius: 8px; background: var(--seg-bg); box-shadow: var(--card-shadow); }
+
+/* Sliders as in the design: thin 4 px track with a round 16 px thumb (native range look). */
+.slider[data-orientation="horizontal"] { gap: 0; }
+.slider[data-orientation="horizontal"] .slider__track {
+  width: auto; height: 4px; margin: 6px 8px; border: 0; border-radius: 2px; background: var(--d200);
+}
+.slider[data-orientation="horizontal"] .slider__fill { border-radius: 2px; }
+.slider[data-orientation="horizontal"] .slider__thumb { width: 16px; height: 16px; background: transparent; }
+.slider[data-orientation="horizontal"] .slider__thumb::after {
+  width: 16px; height: 16px; border-radius: 50%; background: var(--accent); box-shadow: none;
+}

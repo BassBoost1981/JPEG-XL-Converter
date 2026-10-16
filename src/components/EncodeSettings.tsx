@@ -15,7 +15,7 @@ export function EncodeSettings({ locked }: { locked: boolean }) {
   const update = useApp((st) => st.updateSettings);
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="contents">
       {s.expert ? (
         <>
           <Field label="Qualität" value={`${s.quality} · Distanz ${formatDistance(distanceFromQuality(s.quality))}`}>
@@ -47,10 +47,12 @@ export function EncodeSettings({ locked }: { locked: boolean }) {
           />
         </>
       ) : (
-        <div role="radiogroup" aria-label="Qualität" className="grid grid-cols-2 gap-2">
+        <div role="radiogroup" aria-label="Qualität" className="flex flex-col gap-2">
+          <span className="text-[13px] text-[var(--muted)]">Qualität</span>
           {(Object.keys(PRESETS) as Preset[]).map((p) => (
             <OptionCard
               key={p}
+              layout="row"
               label={PRESETS[p].label}
               hint={HINTS[p]}
               checked={s.preset === p}

@@ -17,7 +17,7 @@ export function CommonSettings({ locked }: { locked: boolean }) {
   };
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="contents">
       <SwitchRow
         label="Metadaten behalten"
         hint="EXIF, XMP, Farbprofil"
@@ -25,20 +25,13 @@ export function CommonSettings({ locked }: { locked: boolean }) {
         disabled={locked}
         onChange={(keepMetadata) => update({ keepMetadata })}
       />
-      <SwitchRow
-        label="Originale nach Prüfung in den Papierkorb"
-        hint="Nur bei verlustfreiem Ergebnis"
-        selected={s.trashOriginals}
-        disabled={locked}
-        onChange={(trashOriginals) => update({ trashOriginals })}
-      />
       <Dropdown>
         <Dropdown.Trigger
           isDisabled={locked}
-          className="flex w-full flex-col items-start gap-0.5 rounded-xl border-2 border-[var(--line)] px-3 py-2.5 text-left outline-none hover:border-[var(--muted)] data-[disabled]:opacity-50"
+          className="flex w-full flex-col items-start gap-0.5 rounded-xl bg-[var(--d100)] px-3 py-2 text-left outline-none data-[disabled]:opacity-50"
         >
-          <span className="text-xs text-[var(--muted)]">Ausgabeordner · klicken zum Ändern</span>
-          <span className="w-full truncate text-[13px] font-medium">
+          <span className="text-[11px] text-[var(--muted)]">Ausgabeordner · klicken zum Ändern</span>
+          <span className="w-full truncate text-[13px]">
             {s.output.kind === "next" ? "Neben der Originaldatei" : s.output.path}
           </span>
         </Dropdown.Trigger>
@@ -53,6 +46,13 @@ export function CommonSettings({ locked }: { locked: boolean }) {
           </Dropdown.Menu>
         </Dropdown.Popover>
       </Dropdown>
+      <SwitchRow
+        label="Originale nach Prüfung in den Papierkorb"
+        hint="Nur bei verlustfreiem Ergebnis"
+        selected={s.trashOriginals}
+        disabled={locked}
+        onChange={(trashOriginals) => update({ trashOriginals })}
+      />
     </div>
   );
 }

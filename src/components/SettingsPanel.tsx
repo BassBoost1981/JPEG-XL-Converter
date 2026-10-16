@@ -8,9 +8,9 @@ export function SettingsPanel() {
   const locked = useApp((s) => s.run === "running" || s.run === "paused");
 
   return (
-    <div data-testid="SettingsPanel" className="flex flex-col gap-4 p-4">
-      <div className="flex flex-col">
-        <span className="text-[15px] font-semibold">Einstellungen</span>
+    <div data-testid="SettingsPanel" className="flex flex-col gap-[18px] p-[18px]">
+      <div className="flex flex-col gap-0.5">
+        <span className="text-[17px] font-semibold">Einstellungen</span>
         <span className="text-xs text-[var(--muted)]">
           {mode === "enc" ? "Kodierung · nach JPEG XL" : "Dekodierung · aus JPEG XL"}
         </span>

@@ -58,16 +58,16 @@ export function RunFooter() {
   return (
     <div className="flex flex-none flex-col gap-3 border-t border-[var(--line)] px-[18px] py-4">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-xs text-[var(--muted)]">{line}</span>
+        <span className="text-pretty text-xs text-[var(--muted)]">{line}</span>
         <span
           className="text-[22px] font-semibold"
-          style={{ color: saved.startsWith("−") ? "#17c964" : undefined }}
+          style={{ color: saved.startsWith("−") ? "var(--good)" : "var(--muted)" }}
         >
           {saved}
         </span>
       </div>
-      <ProgressBar aria-label="Gesamtfortschritt" value={percent} size="sm">
-        <ProgressBar.Track className="h-2">
+      <ProgressBar aria-label="Gesamtfortschritt" value={percent} size="sm" className="h-2 gap-0">
+        <ProgressBar.Track className="h-2 rounded-full bg-[var(--d200)]">
           <ProgressBar.Fill />
         </ProgressBar.Track>
       </ProgressBar>
@@ -84,7 +84,7 @@ export function RunFooter() {
       <Button
         isDisabled={disabled}
         onPress={onPress}
-        className="h-12 w-full rounded-[14px] bg-[var(--accent)] text-[15px] font-medium text-white shadow-[0_6px_16px_rgba(0,111,238,.35)] data-[disabled]:opacity-50 data-[disabled]:shadow-none"
+        className="h-12 w-full rounded-[14px] bg-[var(--accent)] text-[15px] font-medium text-white shadow-[0_6px_16px_rgba(0,111,238,.35)] hover:opacity-90 data-[disabled]:opacity-50 data-[disabled]:shadow-none"
       >
         {label}
       </Button>

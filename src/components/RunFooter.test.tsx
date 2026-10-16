@@ -52,7 +52,7 @@ describe("RunFooter", () => {
     setup([row(1, "done", { outSize: 5 * MB }), row(2), row(3, "running", { progress: 50 }), row(4)]);
     render(<RunFooter />);
     expect(screen.getByText("1 von 4 fertig · 10,0 MB → 5,00 MB")).toBeInTheDocument();
-    expect(screen.getByText("−50 %")).toHaveStyle({ color: "#17c964" });
+    expect(screen.getByText("−50 %")).toHaveStyle({ color: "var(--good)" });
     // (10 + 5) / 40 MB
     expect(screen.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "38");
   });

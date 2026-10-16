@@ -16,8 +16,9 @@ export function DecodeSettings({ locked }: { locked: boolean }) {
   const showBitDepth = s.expert && (s.decodeFormat === "png" || s.decodeFormat === "tiff");
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="contents">
       <div role="radiogroup" aria-label="Ausgabeformat" className="grid grid-cols-2 gap-2">
+        <span className="col-span-2 text-[13px] text-[var(--muted)]">Zielformat</span>
         <OptionCard
           className="col-span-2"
           label="Automatisch"
@@ -39,7 +40,7 @@ export function DecodeSettings({ locked }: { locked: boolean }) {
       </div>
 
       {showInfo && (
-        <p className="rounded-lg bg-[var(--line)] px-3 py-2 text-xs text-[var(--muted)]">
+        <p className="text-pretty rounded-xl bg-[var(--info-bg)] px-3 py-2.5 text-xs text-[var(--info-fg)]">
           Aus JPEG transkodierte Dateien werden bit-genau als Original-JPEG wiederhergestellt.
         </p>
       )}
@@ -58,12 +59,13 @@ export function DecodeSettings({ locked }: { locked: boolean }) {
       )}
 
       {showBitDepth && (
-        <div className="flex items-center justify-between">
-          <span className="text-[13px] font-medium">Bittiefe</span>
-          <div role="radiogroup" aria-label="Bittiefe" className="flex gap-2">
+        <div className="flex items-center gap-3">
+          <span className="flex-1">Bittiefe</span>
+          <div role="radiogroup" aria-label="Bittiefe" className="flex gap-0.5 rounded-[10px] bg-[var(--d100)] p-[3px]">
             {([8, 16] as const).map((d) => (
               <OptionCard
                 key={d}
+                layout="segment"
                 label={`${d} Bit`}
                 hint=""
                 checked={s.bitDepth === d}

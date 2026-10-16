@@ -10,12 +10,12 @@ const WINDOW_BUTTON =
 
 function LabeledSwitch({ label, selected, onChange }: { label: string; selected: boolean; onChange(v: boolean): void }) {
   return (
-    <Switch isSelected={selected} onChange={onChange} className="flex-row items-center gap-2">
+    <Switch isSelected={selected} onChange={onChange} className="flex-row-reverse items-center gap-2">
       <Switch.Control>
         <Switch.Thumb />
       </Switch.Control>
       <Switch.Content>
-        <span className="text-[13px] text-[var(--muted)]">{label}</span>
+        <span className="text-[13px] font-normal text-[var(--muted)]">{label}</span>
       </Switch.Content>
     </Switch>
   );
@@ -30,7 +30,7 @@ export function TitleBar() {
   return (
     <header
       data-tauri-drag-region
-      className="grid h-16 flex-none grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--line)] bg-[var(--card)] pl-5"
+      className="grid h-[65px] flex-none grid-cols-[1fr_auto_1fr] items-center border-b border-[var(--line)] bg-[var(--card)] pl-5"
     >
       <div data-tauri-drag-region className="flex items-center gap-2.5 self-stretch">
         <img src={logo} alt="JPEG XL Konverter" className="pointer-events-none size-8" />

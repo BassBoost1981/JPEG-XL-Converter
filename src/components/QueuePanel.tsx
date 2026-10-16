@@ -8,6 +8,7 @@ import { GRID_COLUMNS, QueueRow, ROW_HEIGHT } from "./QueueRow";
 
 const ENC_HINT = "JPEG, PNG, GIF, TIFF, WebP, BMP";
 const DEC_HINT = ".jxl-Dateien";
+const BTN = "h-[30px] min-h-0 rounded-[10px] text-[13px] font-normal";
 
 export function QueuePanel() {
   const mode = useApp((s) => s.settings.mode);
@@ -39,17 +40,30 @@ export function QueuePanel() {
     <>
       <div className="flex flex-none items-center gap-2 px-4 pb-2.5 pt-3.5">
         <span className="text-[15px] font-semibold">Warteschlange</span>
-        <span className="rounded-full bg-[var(--line)] px-2 py-0.5 text-xs text-[var(--muted)]">
+        <span className="rounded-full bg-[var(--d100)] px-2 py-0.5 text-xs text-[var(--muted)]">
           {rows.length === 1 ? "1 Datei" : `${formatCount(rows.length)} Dateien`}
         </span>
         <div className="flex-1" />
-        <Button size="sm" variant="outline" onPress={() => void pickFiles()}>
+        <Button
+          variant="outline"
+          className={`${BTN} border-2 border-[var(--d200)] bg-transparent px-3 text-[var(--fg)]`}
+          onPress={() => void pickFiles()}
+        >
           Dateien
         </Button>
-        <Button size="sm" variant="secondary" onPress={() => void pickFolder()}>
+        <Button
+          variant="secondary"
+          className={`${BTN} bg-[var(--info-bg)] px-3.5 text-[var(--info-fg)]`}
+          onPress={() => void pickFolder()}
+        >
           Ordner hinzufügen
         </Button>
-        <Button size="sm" variant="danger-soft" isDisabled={running} onPress={() => void useApp.getState().clear()}>
+        <Button
+          variant="ghost"
+          isDisabled={running}
+          className={`${BTN} bg-transparent px-2.5 text-[#f31260]`}
+          onPress={() => void useApp.getState().clear()}
+        >
           Leeren
         </Button>
       </div>
@@ -61,7 +75,7 @@ export function QueuePanel() {
       )}
 
       <div
-        className="mx-3 grid flex-none gap-3 rounded-lg bg-[var(--line)] px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[.03em] text-[var(--muted)]"
+        className="mx-3 grid flex-none gap-3 rounded-lg bg-[var(--d100)] px-2.5 py-2 text-[11px] font-semibold uppercase tracking-[.03em] text-[var(--muted)]"
         style={{ gridTemplateColumns: GRID_COLUMNS }}
       >
         <span />
@@ -73,7 +87,7 @@ export function QueuePanel() {
       </div>
 
       {rows.length === 0 ? (
-        <div className="mx-3 mb-3 mt-2.5 flex h-[140px] flex-none flex-col items-center justify-center gap-1 rounded-[14px] border-2 border-dashed border-[var(--line)] text-[var(--muted)]">
+        <div className="mx-3 mb-3 mt-2.5 flex h-[140px] flex-none flex-col items-center justify-center gap-1 rounded-[14px] border-2 border-dashed border-[var(--d200)] text-[var(--muted)]">
           <span className="font-semibold text-[var(--fg)]">Bilder oder Ordner hierher ziehen</span>
           <span className="text-xs">{mode === "enc" ? ENC_HINT : DEC_HINT}</span>
         </div>

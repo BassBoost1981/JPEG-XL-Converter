@@ -123,7 +123,7 @@ export function CompareSlider() {
           </span>
         )}
       </div>
-      <div ref={field} className="relative h-[240px] overflow-hidden rounded-[10px] bg-[var(--line)]">
+      <div ref={field} className="relative h-[240px] overflow-hidden rounded-[10px] bg-[repeating-linear-gradient(135deg,var(--stripe-a)_0_10px,var(--stripe-b)_10px_20px)]">
         {!row ? (
           <div className="absolute inset-0 flex items-center justify-center text-[var(--muted)]">
             Keine Datei ausgewählt
@@ -153,7 +153,7 @@ export function CompareSlider() {
                 Vorschau nicht möglich
               </div>
             )}
-            <span className={`${TAG} left-2.5 bg-[var(--card)]`}>{leftTag}</span>
+            <span className={`${TAG} left-2.5 bg-[var(--overlay)]`}>{leftTag}</span>
             <span className={`${TAG} right-2.5 bg-[var(--accent)] text-white`}>{rightTag}</span>
             <div
               data-testid="compare-divider"
