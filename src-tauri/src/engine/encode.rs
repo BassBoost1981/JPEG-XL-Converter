@@ -90,8 +90,8 @@ fn run(
 
     // ---- check
     let lossless = transcode || (entry.kind != InputKind::Jpeg && settings.encode.distance == 0.0);
-    let mut metadata_lost =
-        transfer.is_some_and(|t| t.exif == MetaState::Lost || t.icc == MetaState::Lost);
+    // Metadata cjxl dropped (seen in the decoded result).
+    let mut decoded_metadata_lost = false;
     if transcode {
         let restored = scratch.add(work_file("pruefung.jpg"));
         let failed = "JPEG lässt sich nicht wiederherstellen";
@@ -125,7 +125,7 @@ fn run(
             check_dims(&input, &decoded)?;
         }
         if keep_metadata {
-            metadata_lost |= facts.metadata_lost(&decoded)?;
+            decoded_metadata_lost = facts.metadata_lost(&decoded)?;
         }
     }
     (ctx.progress)(90);
@@ -135,14 +135,20 @@ fn run(
     place(&tmp, target, scratch)?;
     let dates_copied = copy_file_times(source, target).is_ok();
 
+    // The per-field flags only choose the notes.
     let pages_lost = transfer.is_some_and(|t| t.frames == MetaState::Lost);
+    let metadata_lost = decoded_metadata_lost
+        || transfer.is_some_and(|t| t.exif == MetaState::Lost || t.icc == MetaState::Lost);
     let trash = TrashContext {
         enabled: settings.trash_originals,
         // Only the first frame of an animation was compared.
         verified: !facts.animated,
         lossless,
         metadata_complete: dates_copied
-            && (transcode || (keep_metadata && !metadata_lost && !pages_lost)),
+            && (transcode
+                || (keep_metadata
+                    && !decoded_metadata_lost
+                    && transfer.is_none_or(|t| t.complete()))),
     };
     let mut notes: Vec<String> = Vec::new();
     if pages_lost {
