@@ -19,12 +19,14 @@ use windows::Win32::Foundation::{
     ERROR_PATH_NOT_FOUND, ERROR_SHARING_VIOLATION, ERROR_SUCCESS,
 };
 use windows::Win32::Storage::FileSystem::{
-    GetDriveTypeW, GetVolumeNameForVolumeMountPointW, GetVolumePathNameW,
+    GetDiskFreeSpaceExW, GetDriveTypeW, GetVolumeNameForVolumeMountPointW, GetVolumePathNameW,
 };
 use windows::Win32::System::Com::{
     CLSCTX_ALL, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
 };
-use windows::Win32::System::Registry::{HKEY_CURRENT_USER, RRF_RT_REG_DWORD, RegGetValueW};
+use windows::Win32::System::Registry::{
+    HKEY, HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, RRF_RT_REG_DWORD, RegGetValueW,
+};
 use windows::Win32::UI::Shell::{
     COPYENGINE_E_ACCESS_DENIED_SRC, COPYENGINE_E_SHARING_VIOLATION_SRC,
     COPYENGINE_E_USER_CANCELLED, FOF_ALLOWUNDO, FOF_NOCONFIRMATION, FOF_NOERRORUI, FOF_SILENT,
@@ -39,6 +41,8 @@ const NOTE_TOO_LARGE: &str = "Original behalten: zu groß für den Papierkorb";
 /// Per-volume recycle-bin settings of the current user (HKCU).
 const BITBUCKET_VOLUMES: &str =
     r"Software\Microsoft\Windows\CurrentVersion\Explorer\BitBucket\Volume";
+/// Explorer group policies, read below HKCU and HKLM.
+const EXPLORER_POLICIES: &str = r"Software\Microsoft\Windows\CurrentVersion\Policies\Explorer";
 /// `GetDriveTypeW` result for a fixed disk (WinBase.h).
 const DRIVE_FIXED: u32 = 3;
 /// Access right to change a file's attributes and times (WinNT.h).
@@ -82,28 +86,12 @@ pub trait RecycleBin: Send + Sync {
 pub struct WindowsRecycleBin;
 
 impl RecycleBin for WindowsRecycleBin {
-    /// Fixed drive, volume known, and the user's recycle-bin settings for that
-    /// volume allow the file. Whatever cannot be determined reliably counts
-    /// as `NoRecycleBin`.
+    /// Fixed drive, volume known, and neither the Explorer policies nor the
+    /// recycle-bin settings of that volume stand in the way. Whatever cannot
+    /// be determined reliably counts as `NoRecycleBin`.
     fn availability(&self, path: &Path, size: u64) -> Availability {
-        let Some(root) = local_drive_root(path) else {
-            return Availability::NoRecycleBin;
-        };
-        let root = HSTRING::from(root);
-        if unsafe { GetDriveTypeW(&root) } != DRIVE_FIXED {
-            return Availability::NoRecycleBin;
-        }
-        let mut volume = [0u16; 64];
-        if unsafe { GetVolumeNameForVolumeMountPointW(&root, &mut volume) }.is_err() {
-            return Availability::NoRecycleBin;
-        }
-        // `\\?\Volume{GUID}\` -> `{GUID}`
-        let volume = wide_to_string(&volume);
-        match volume
-            .strip_prefix(r"\\?\Volume")
-            .and_then(|rest| rest.strip_suffix('\\'))
-        {
-            Some(guid) => bitbucket_rule(guid, size),
+        match bin_facts(path) {
+            Some(facts) => decide(&facts, size),
             None => Availability::NoRecycleBin,
         }
     }
@@ -239,30 +227,86 @@ fn wide_to_string(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
-/// The user's recycle-bin settings for one volume (Papierkorb → Eigenschaften).
-/// Without an entry Windows uses its defaults, which include a recycle bin.
-fn bitbucket_rule(guid: &str, size: u64) -> Availability {
-    let key = HSTRING::from(format!(r"{BITBUCKET_VOLUMES}\{guid}"));
-    match read_dword(&key, w!("NukeOnDelete")) {
-        Ok(None | Some(0)) => {}
-        Ok(Some(_)) | Err(()) => return Availability::NoRecycleBin,
+/// Everything the recycle-bin decision for one volume depends on, as read
+/// from Windows. `None` means "not set". Policy pairs are `[HKCU, HKLM]`.
+#[derive(Debug, Clone, Copy)]
+struct BinFacts {
+    drive_type: u32,
+    nuke_on_delete: Option<u32>,
+    max_capacity_mb: Option<u32>,
+    policy_no_recycle_files: [Option<u32>; 2],
+    /// Percent of the volume.
+    policy_recycle_bin_size: [Option<u32>; 2],
+    volume_bytes: u64,
+}
+
+/// The recycle-bin rules.
+/// - Not a fixed drive, `NoRecycleFiles` policy in either hive, or the
+///   volume's `NukeOnDelete`: no recycle bin.
+/// - `RecycleBinSize` policy (percent of the volume; the smaller one when
+///   both hives set it) replaces the volume's own `MaxCapacity`; 0 % means
+///   Windows deletes at once.
+/// - Nothing set: Windows' defaults, which include a recycle bin.
+fn decide(facts: &BinFacts, size: u64) -> Availability {
+    let on = |value: Option<u32>| value.is_some_and(|v| v != 0);
+    if facts.drive_type != DRIVE_FIXED
+        || facts.policy_no_recycle_files.into_iter().any(on)
+        || on(facts.nuke_on_delete)
+    {
+        return Availability::NoRecycleBin;
     }
-    match read_dword(&key, w!("MaxCapacity")) {
-        Ok(None) => Availability::Available,
-        Ok(Some(mb)) if size <= u64::from(mb) * 1024 * 1024 => Availability::Available,
-        Ok(Some(_)) => Availability::TooLarge,
-        Err(()) => Availability::NoRecycleBin,
+    let capacity = match facts.policy_recycle_bin_size.into_iter().flatten().min() {
+        Some(0) => return Availability::NoRecycleBin,
+        Some(percent) => u128::from(facts.volume_bytes) * u128::from(percent.min(100)) / 100,
+        None => match facts.max_capacity_mb {
+            Some(mb) => u128::from(mb) * 1024 * 1024,
+            None => return Availability::Available,
+        },
+    };
+    if u128::from(size) <= capacity {
+        Availability::Available
+    } else {
+        Availability::TooLarge
     }
 }
 
-/// A DWORD below HKCU. `Ok(None)` when the key or the value does not exist,
-/// `Err` when it exists but cannot be read as a DWORD.
-fn read_dword(key: &HSTRING, value: PCWSTR) -> Result<Option<u32>, ()> {
+/// Reads what `decide` needs for the volume that holds `path`. `None` when
+/// any of it cannot be determined reliably.
+fn bin_facts(path: &Path) -> Option<BinFacts> {
+    let root = HSTRING::from(local_drive_root(path)?);
+    let mut volume = [0u16; 64];
+    unsafe { GetVolumeNameForVolumeMountPointW(&root, &mut volume) }.ok()?;
+    // `\\?\Volume{GUID}\` -> `{GUID}`
+    let volume = wide_to_string(&volume);
+    let guid = volume.strip_prefix(r"\\?\Volume")?.strip_suffix('\\')?;
+    let bitbucket = HSTRING::from(format!(r"{BITBUCKET_VOLUMES}\{guid}"));
+    let policies = HSTRING::from(EXPLORER_POLICIES);
+    let policy = |name| {
+        Some([
+            read_dword(HKEY_CURRENT_USER, &policies, name).ok()?,
+            read_dword(HKEY_LOCAL_MACHINE, &policies, name).ok()?,
+        ])
+    };
+    let mut volume_bytes = 0u64;
+    unsafe { GetDiskFreeSpaceExW(&root, None, Some(&mut volume_bytes), None) }.ok()?;
+    Some(BinFacts {
+        drive_type: unsafe { GetDriveTypeW(&root) },
+        nuke_on_delete: read_dword(HKEY_CURRENT_USER, &bitbucket, w!("NukeOnDelete")).ok()?,
+        max_capacity_mb: read_dword(HKEY_CURRENT_USER, &bitbucket, w!("MaxCapacity")).ok()?,
+        policy_no_recycle_files: policy(w!("NoRecycleFiles"))?,
+        policy_recycle_bin_size: policy(w!("RecycleBinSize"))?,
+        volume_bytes,
+    })
+}
+
+/// A DWORD from the registry. `Ok(None)` when the key or the value does not
+/// exist, `Err` when it exists but cannot be read as a DWORD.
+fn read_dword(hive: HKEY, key: &HSTRING, value: PCWSTR) -> Result<Option<u32>, ()> {
     let mut data = 0u32;
     let mut len = size_of::<u32>() as u32;
     let status = unsafe {
         RegGetValueW(
-            HKEY_CURRENT_USER,
+            hive,
             key,
             value,
             RRF_RT_REG_DWORD,
@@ -521,6 +565,115 @@ mod tests {
             reason(HRESULT(0x8027_0058_u32 as i32)),
             "Windows-Fehler 0x80270058"
         );
+    }
+
+    const GB: u64 = 1_000_000_000;
+    const MIB: u64 = 1024 * 1024;
+
+    /// A fixed drive of 100 GB with nothing configured.
+    fn facts() -> BinFacts {
+        BinFacts {
+            drive_type: DRIVE_FIXED,
+            nuke_on_delete: None,
+            max_capacity_mb: None,
+            policy_no_recycle_files: [None, None],
+            policy_recycle_bin_size: [None, None],
+            volume_bytes: 100 * GB,
+        }
+    }
+
+    #[test]
+    fn bin_rules_without_policy() {
+        assert_eq!(decide(&facts(), 50 * GB), Availability::Available);
+        let removable = BinFacts {
+            drive_type: 2,
+            ..facts()
+        };
+        assert_eq!(decide(&removable, 1), Availability::NoRecycleBin);
+        for (nuke, expected) in [
+            (Some(0), Availability::Available),
+            (Some(1), Availability::NoRecycleBin),
+            (Some(7), Availability::NoRecycleBin),
+        ] {
+            let f = BinFacts {
+                nuke_on_delete: nuke,
+                ..facts()
+            };
+            assert_eq!(decide(&f, 1), expected, "{nuke:?}");
+        }
+        let capped = BinFacts {
+            nuke_on_delete: Some(0),
+            max_capacity_mb: Some(100),
+            ..facts()
+        };
+        assert_eq!(decide(&capped, 100 * MIB), Availability::Available);
+        assert_eq!(decide(&capped, 100 * MIB + 1), Availability::TooLarge);
+    }
+
+    #[test]
+    fn policy_no_recycle_files_means_no_recycle_bin() {
+        // The volume's own settings would allow it.
+        let bin = BinFacts {
+            nuke_on_delete: Some(0),
+            max_capacity_mb: Some(50_000),
+            ..facts()
+        };
+        for policy in [[Some(1), None], [None, Some(1)], [Some(0), Some(1)]] {
+            let f = BinFacts {
+                policy_no_recycle_files: policy,
+                ..bin
+            };
+            assert_eq!(decide(&f, 1), Availability::NoRecycleBin, "{policy:?}");
+        }
+        let off = BinFacts {
+            policy_no_recycle_files: [Some(0), Some(0)],
+            ..bin
+        };
+        assert_eq!(decide(&off, 1), Availability::Available);
+    }
+
+    #[test]
+    fn policy_recycle_bin_size_sets_the_capacity() {
+        let ten_percent = |hkcu, hklm, max_capacity_mb| BinFacts {
+            nuke_on_delete: Some(0),
+            max_capacity_mb,
+            policy_recycle_bin_size: [hkcu, hklm],
+            ..facts()
+        };
+        // 10 % of 100 GB, from either hive.
+        for f in [
+            ten_percent(Some(10), None, None),
+            ten_percent(None, Some(10), None),
+        ] {
+            assert_eq!(decide(&f, 15 * GB), Availability::TooLarge);
+            assert_eq!(decide(&f, 10 * GB), Availability::Available);
+        }
+        // The policy overrides MaxCapacity in both directions.
+        let big_volume_setting = ten_percent(Some(10), None, Some(50_000));
+        assert_eq!(decide(&big_volume_setting, 15 * GB), Availability::TooLarge);
+        let small_volume_setting = ten_percent(Some(10), None, Some(1));
+        assert_eq!(
+            decide(&small_volume_setting, 5 * GB),
+            Availability::Available
+        );
+        // Set in both hives: the smaller one counts.
+        let both = ten_percent(Some(50), Some(10), None);
+        assert_eq!(decide(&both, 15 * GB), Availability::TooLarge);
+        // More than 100 % is read as 100 %.
+        let over = ten_percent(Some(250), None, None);
+        assert_eq!(decide(&over, 100 * GB), Availability::Available);
+        assert_eq!(decide(&over, 100 * GB + 1), Availability::TooLarge);
+    }
+
+    #[test]
+    fn policy_recycle_bin_size_zero_means_no_recycle_bin() {
+        for policy in [[Some(0), None], [None, Some(0)], [Some(10), Some(0)]] {
+            let f = BinFacts {
+                policy_recycle_bin_size: policy,
+                ..facts()
+            };
+            assert_eq!(decide(&f, 1), Availability::NoRecycleBin, "{policy:?}");
+        }
     }
 
     #[test]
