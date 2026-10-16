@@ -1,9 +1,10 @@
 //! Locates, checks and runs cjxl.exe / djxl.exe.
 
+use std::fs;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::Duration;
 
@@ -132,8 +133,19 @@ fn extended_length(path: &Path) -> PathBuf {
     }
 }
 
-/// Runs `exe INPUT OUTPUT ARGS...` without a console window, polls every
-/// 50 ms and kills the process as soon as `cancel` is set.
+/// `exe INPUT OUTPUT ARGS...` without a console window, stderr piped.
+fn tool_command(exe: &Path, input: &Path, output: &Path, args: &[String]) -> Command {
+    let mut cmd = Command::new(exe);
+    cmd.arg(extended_length(input))
+        .arg(extended_length(output))
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .creation_flags(CREATE_NO_WINDOW);
+    cmd
+}
+
 fn run_tool(
     exe: &Path,
     input: &Path,
@@ -141,22 +153,29 @@ fn run_tool(
     args: &[String],
     cancel: &CancelToken,
 ) -> Result<(), ToolError> {
-    let fail = |stderr: String| ToolError {
-        exit_code: None,
-        stderr,
-        cancelled: false,
-    };
-    let mut child = Command::new(exe)
-        .arg(extended_length(input))
-        .arg(extended_length(output))
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::piped())
-        .creation_flags(CREATE_NO_WINDOW)
+    // If in doubt, treat the output as pre-existing: it is then never removed.
+    let existed = output.try_exists().unwrap_or(true);
+    let child = tool_command(exe, input, output, args)
         .spawn()
-        .map_err(|e| fail(e.to_string()))?;
+        .map_err(|e| ToolError {
+            exit_code: None,
+            stderr: e.to_string(),
+            cancelled: false,
+        })?;
+    supervise(child, output, existed, cancel)
+}
 
+/// Polls `child` every 50 ms and kills it as soon as `cancel` is set.
+///
+/// A cancelled or failed run never leaves an output behind: if the tool
+/// created `output` (`existed == false`), a partial or orphaned file is
+/// removed. A file that was there before the run is never touched.
+fn supervise(
+    mut child: Child,
+    output: &Path,
+    existed: bool,
+    cancel: &CancelToken,
+) -> Result<(), ToolError> {
     // Read stderr on its own thread so a full pipe can never block the tool.
     let mut pipe = child.stderr.take().expect("stderr is piped");
     let reader = thread::spawn(move || {
@@ -165,11 +184,17 @@ fn run_tool(
         String::from_utf8_lossy(&buf).into_owned()
     });
     let stderr = move || reader.join().unwrap_or_default();
+    let discard_output = || {
+        if !existed {
+            let _ = fs::remove_file(output);
+        }
+    };
 
     loop {
         if cancel.is_cancelled() {
             let _ = child.kill();
             let _ = child.wait();
+            discard_output();
             return Err(ToolError {
                 exit_code: None,
                 stderr: stderr(),
@@ -182,6 +207,7 @@ fn run_tool(
                 if status.success() {
                     return Ok(());
                 }
+                discard_output();
                 return Err(ToolError {
                     exit_code: status.code(),
                     stderr,
@@ -192,7 +218,12 @@ fn run_tool(
             Err(e) => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(fail(e.to_string()));
+                discard_output();
+                return Err(ToolError {
+                    exit_code: None,
+                    stderr: e.to_string(),
+                    cancelled: false,
+                });
             }
         }
     }
@@ -301,6 +332,64 @@ mod tests {
             "took {:?}",
             start.elapsed()
         );
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn failed_run_keeps_preexisting_output() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("kaputt.png");
+        let output = dir.path().join("vorhanden.jxl");
+        fs::write(&input, b"not an image").unwrap();
+        fs::write(&output, b"keep me").unwrap();
+
+        let err = tools()
+            .run_cjxl(&input, &output, &lossless(7), &CancelToken::new())
+            .unwrap_err();
+
+        assert_eq!(err.exit_code, Some(1));
+        assert_eq!(fs::read(&output).unwrap(), b"keep me");
+    }
+
+    #[test]
+    fn failed_run_removes_output_it_created() {
+        // Simulates a tool that wrote a partial file and then failed:
+        // the file is there, but did not exist before the run.
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("kaputt.png");
+        let output = dir.path().join("teil.jxl");
+        fs::write(&input, b"not an image").unwrap();
+        fs::write(&output, b"partial").unwrap();
+        let child = tool_command(&tools().cjxl, &input, &output, &lossless(7))
+            .spawn()
+            .unwrap();
+
+        let err = supervise(child, &output, false, &CancelToken::new()).unwrap_err();
+
+        assert_eq!(err.exit_code, Some(1));
+        assert!(!err.cancelled);
+        assert!(!output.exists());
+    }
+
+    #[test]
+    fn cancel_after_tool_finished_removes_its_output() {
+        // The tool has already written a complete output and exited when the
+        // cancel is seen (cancel within the 50 ms poll window).
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("klein.png");
+        let output = dir.path().join("klein.jxl");
+        write_noise_png(&input, 64, 48);
+        let mut child = tool_command(&tools().cjxl, &input, &output, &lossless(7))
+            .spawn()
+            .unwrap();
+        assert!(child.wait().unwrap().success());
+        assert!(output.is_file());
+        let cancel = CancelToken::new();
+        cancel.cancel();
+
+        let err = supervise(child, &output, false, &cancel).unwrap_err();
+
+        assert!(err.cancelled, "{err:?}");
         assert!(!output.exists());
     }
 
