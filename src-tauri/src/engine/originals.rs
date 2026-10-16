@@ -328,12 +328,13 @@ fn recycle_in_sta(path: &Path) -> Result<(), String> {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
         .ok()
         .map_err(|e| reason(e.code()))?;
-    // All COM objects live inside `shell_recycle` and are released before
-    // CoUninitialize.
-    let aborted = shell_recycle(path);
+    // The interfaces are released when `shell_recycle` returns. A failure's
+    // `Error` may still hold an `IErrorInfo`, so it is reduced to its plain
+    // HRESULT (dropping that pointer) before CoUninitialize.
+    let aborted = shell_recycle(path).map_err(|e| e.code());
     unsafe { CoUninitialize() };
     match aborted {
-        Err(e) => Err(reason(e.code())),
+        Err(code) => Err(reason(code)),
         Ok(true) => Err("Vorgang abgebrochen".to_string()),
         Ok(false) => match path.try_exists() {
             Ok(false) => Ok(()),
