@@ -60,8 +60,9 @@ mit `.\scripts\package-portable.ps1`.
   ```
 
   Das Ergebnis entspricht der „nachher“-Größe in der Zusammenfassung.
-- [ ] Einen Eintrag mit „Fertig“ aufklappen / den Vorher-Nachher-Vergleich ansehen: kein
-      sichtbarer Unterschied bei „Hohe Qualität“.
+- [ ] Einen Eintrag mit „Fertig“ auswählen und den Vorher-Nachher-Vergleich ansehen: kein
+      sichtbarer Unterschied bei „Ausgewogen“. Hinweise und Fehlergründe zeigt der Tooltip, wenn
+      man mit der Maus über den Status fährt.
 - [ ] Es liegen keine `*.tmp`-Reste in den Ordnern.
 - [ ] Den Durchlauf mit denselben Dateien nochmals starten (Liste leeren, Ordner erneut
       hineinziehen): Alles ist „Übersprungen“ (bestehende Ziele werden nie überschrieben).
@@ -87,6 +88,7 @@ Die Rückwandlung läuft in einen **eigenen Ausgabeordner**, damit nichts „Üb
 der Vergleich eindeutig ist. Grundlage ist `Fotos-Kopie` aus Schritt 2 (dort liegen die `.jxl`)
 und die CSV aus Schritt 1.
 
+- [ ] Papierkorb-Schalter **aus** (er ist aus Schritt 3 noch an).
 - [ ] Modus „Aus JPEG XL“, Ausgabeformat „Automatisch“. Ausgabeordner: „Ordner wählen …“ →
       `D:\Test\Zurück` (neuer, leerer Ordner).
 - [ ] `Fotos-Kopie` ins Fenster ziehen (aufgenommen werden nur die `.jxl`), umwandeln.
@@ -113,7 +115,10 @@ und die CSV aus Schritt 1.
   ```
 
   Erwartet: gleiche Anzahl auf beiden Seiten und die Ausgabe `alles gleich`. Jede andere Zeile
-  (`FEHLT`, `ZUVIEL`, `UNTERSCHIEDLICH`) ist ein Fehler, der gemeldet werden muss.
+  (`FEHLT`, `ZUVIEL`, `UNTERSCHIEDLICH`) ist ein Fehler, der gemeldet werden muss. Die Zahl bei
+  „Vorher“ muss außerdem der in Schritt 1 erfassten Anzahl entsprechen; ist sie kleiner, liegen
+  in einem Ordner zwei JPEGs mit gleichem Namen und anderer Endung (z. B. `foto.jpg` und
+  `foto.jpeg`), von denen nur eines umgewandelt wurde (das andere ist „Übersprungen“).
 - [ ] PNG/TIFF, verlustfrei umgewandelt und zurück: Bilder sehen gleich aus und haben gleiche
       Pixelmaße (die Bytes können abweichen, die Pixel nicht).
 
