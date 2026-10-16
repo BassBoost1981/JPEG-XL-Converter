@@ -116,6 +116,16 @@ describe("CompareSlider", () => {
     expect(backend.preview).toHaveBeenCalledTimes(2);
   });
 
+  it("der Papierkorb-Schalter lädt die Vorschau nicht neu", async () => {
+    setup();
+    render(<CompareSlider />);
+    await advance(0);
+    expect(backend.preview).toHaveBeenCalledTimes(1);
+    act(() => useApp.getState().updateSettings({ trashOriginals: true }));
+    await advance(1000);
+    expect(backend.preview).toHaveBeenCalledTimes(1);
+  });
+
   it("lädt beim Wechsel der Auswahl sofort", async () => {
     setup([row(1), row(2)]);
     render(<CompareSlider />);

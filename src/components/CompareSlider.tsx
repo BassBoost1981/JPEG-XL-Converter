@@ -39,9 +39,10 @@ export function CompareSlider() {
   });
   const itemId = row?.id ?? null;
 
-  // Only what reaches the backend may trigger a reload (theme, window state etc. must not).
+  // Only what changes the preview may trigger a reload (theme, window state etc. must not).
+  // The recycle-bin switch never touches the pixels; metadata can (EXIF orientation).
   const job = useMemo(() => toJobSettings(settings), [settings]);
-  const jobKey = JSON.stringify([mode, job]);
+  const jobKey = JSON.stringify([mode, { ...job, trashOriginals: undefined }]);
 
   const [split, setSplit] = useState(50);
   const [preview, setPreview] = useState<PreviewDto | null>(null);
