@@ -151,3 +151,53 @@ Reihenfolge, die funktioniert. In normaler Form scheitert nur der lange Pfad, da
 Testlauf ohne Präfix. Umlaute und Emoji gehen dank UTF-8-Manifest ohnehin. Die Langform hebt
 die 260-Zeichen-Grenze auf, ohne Daten durch Rust zu leiten (Variante 2) oder Dateien zu
 kopieren (Variante 3). Aufrufer übergeben ganz normale `PathBuf`s und merken davon nichts.
+
+## Task 8: Ausrichtung und Metadaten beim Umwandeln nach JXL
+
+Geprüft am 2026-10-16 mit PNG-Testbildern (64 × 48), `cjxl -d 0 -e 7`, dann `djxl` nach PNG.
+
+### EXIF-Ausrichtung (Ruling R11)
+
+- `djxl` hat **keine** Option, die Ausrichtung beim Dekodieren zu behalten
+  (`--help -v -v -v -v` nennt nichts dazu).
+- **Mit Metadaten:** `cjxl` liest die Ausrichtung aus dem `eXIf`-Chunk der PNG und schreibt
+  sie in den JXL-Header. `djxl` dreht die Pixel beim Dekodieren entsprechend und setzt den
+  Ausrichtungswert im ausgegebenen EXIF auf 1. Bei Ausrichtung 6 und 5 kommt aus einem
+  64 × 48-Bild also ein 48 × 64-Bild. Die Pixel sind genau die des Ausgangsbilds, gedreht wie
+  vom EXIF verlangt (geprüft für 1, 3, 5, 6 und 8).
+- **Ohne Metadaten** (`-x strip=exif -x strip=xmp`): Die Ausrichtung geht mit dem EXIF
+  verloren. `djxl` liefert die Pixel ungedreht, so wie sie in der PNG stehen.
+- Folgerung für die Pixelprüfung in `encode.rs`: Das Vergleichsbild ist die `cjxl`-Eingabe,
+  bei eingeschalteten Metadaten gedreht nach ihrer EXIF-Ausrichtung (`image`:
+  `ImageDecoder::orientation` + `DynamicImage::apply_orientation`), sonst ungedreht. Die
+  Maßprüfung bei Verlust nutzt `dims_match` (gleich oder vertauscht).
+- Das `image`-Crate liest die Ausrichtung einer PNG nur aus `eXIf`. Steht sie nur in einem
+  `zTXt`-Chunk „Raw profile type exif“, würde der Vergleich fehlschlagen
+  (Prüfung fehlgeschlagen, Original bleibt). PNGs von `djxl` haben dort immer Ausrichtung 1.
+
+### Was `cjxl` aus einer PNG übernimmt
+
+| Chunk | Ergebnis nach `djxl` |
+|---|---|
+| `eXIf` | übernommen (als `zTXt` „Raw profile type exif“) |
+| `iTXt` „XML:com.adobe.xmp“ | übernommen (als `zTXt` „Raw profile type xmp“) |
+| `zTXt` „Raw profile type exif/xmp“ im Format von `djxl` | übernommen |
+| `zTXt` „Raw profile type exif“ ohne Zeilenumbrüche im Hex-Text | **still verworfen** |
+| `tEXt` „Title“, `pHYs`, `tIME`, `bKGD` | **verworfen** |
+
+`djxl` schreibt immer `sRGB`, `gAMA` und `cHRM` (bzw. `iCCP`). Deshalb prüft `encode.rs`
+nach dem Dekodieren, ob EXIF und XMP der Quelle auch im Ergebnis stehen, und zählt jeden
+anderen Zusatz-Chunk der Quelle (alles außer Bildstruktur, Farbe und Animation) als verloren
+(`convert_io::PngMeta::other_metadata`). Dann bleibt das Original liegen und der Eintrag
+bekommt den Hinweis „Metadaten nicht vollständig übernommen“.
+
+### Weitere Beobachtungen
+
+- Ein CMYK-JPEG lässt sich nicht umpacken: `cjxl --lossless_jpeg=1` endet mit
+  „EncodeImageJXL() failed.“ und Exit-Code 1.
+- Eine PNG mit der Endung `.jpg` nimmt `cjxl` mit `--lossless_jpeg=1` ohne Fehler an und
+  kodiert die Pixel (keine `jbrd`-Box). `encode.rs` prüft deshalb vorher am Dateiinhalt, ob
+  JPEG, PNG und GIF wirklich das sind, was die Endung sagt.
+- Ein GIF mit zwei Bildern wird zu einer animierten JXL. `djxl` schreibt daraus eine APNG,
+  deren erstes Bild pixelgleich mit dem ersten Bild des GIF ist. Geprüft wird nur dieses
+  erste Bild, deshalb wandert ein animiertes Original nie in den Papierkorb (Ruling R17).

@@ -119,7 +119,7 @@ fn tool_version(exe: &Path) -> Result<String, String> {
 /// unless it is given in extended-length form (`\\?\C:\…`, `\\?\UNC\server\…`),
 /// which has no length limit. Umlauts and emoji work either way (the tools
 /// run with the UTF-8 code page). See docs/libjxl-notes.md.
-fn extended_length(path: &Path) -> PathBuf {
+pub(crate) fn extended_length(path: &Path) -> PathBuf {
     let Ok(abs) = std::path::absolute(path) else {
         return path.to_path_buf();
     };

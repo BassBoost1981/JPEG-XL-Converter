@@ -1,6 +1,7 @@
 pub mod args;
 pub mod convert_io;
 pub mod disk;
+pub mod encode;
 pub mod formats;
 pub mod jxl_container;
 pub mod originals;

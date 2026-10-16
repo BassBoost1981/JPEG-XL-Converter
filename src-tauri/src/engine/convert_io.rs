@@ -574,14 +574,21 @@ const KEYWORD_WINDOW: usize = 80;
 /// PNG chunks are shorter than 2^31 bytes.
 const MAX_CHUNK_LEN: u32 = i32::MAX as u32;
 
-/// What a PNG holds that TIFF and WebP output cannot.
-#[derive(Debug, Default, Clone, Copy)]
-struct PngMeta {
-    exif: bool,
-    xmp: bool,
-    icc: bool,
+/// What a PNG holds that matters when it is converted: what TIFF and WebP
+/// output cannot take, and what cjxl does not carry into a JXL.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PngMeta {
+    /// EXIF: an `eXIf` chunk or a "Raw profile type exif" text chunk.
+    pub exif: bool,
+    /// XMP: a "Raw profile type xmp" or "XML:com.adobe.xmp" text chunk.
+    pub xmp: bool,
+    pub icc: bool,
     /// An animated PNG (APNG) with more than one frame.
-    animated: bool,
+    pub animated: bool,
+    /// Any other chunk that is neither image structure nor colour nor
+    /// animation: other text chunks (title, author, IPTC ...), `pHYs`, `tIME`,
+    /// `bKGD`, private chunks. cjxl v0.12.0 drops them (docs/libjxl-notes.md).
+    pub other_metadata: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -656,10 +663,16 @@ fn read_signature(input: &mut impl Read) -> io::Result<()> {
     }
 }
 
-fn scan_png(path: &Path) -> Result<PngMeta, String> {
+/// Reads the chunk list of a PNG (not the image data). German error texts.
+pub fn scan_png(path: &Path) -> Result<PngMeta, String> {
     let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
     scan(&mut input).map_err(|_| READ_ERROR.to_string())
 }
+
+/// Chunks that hold image data, colour or animation, which cjxl takes over.
+const STRUCTURE_CHUNKS: [&[u8; 4]; 10] = [
+    b"IHDR", b"PLTE", b"IDAT", b"tRNS", b"sRGB", b"gAMA", b"cHRM", b"acTL", b"fcTL", b"fdAT",
+];
 
 /// Walks the chunks up to `IEND`, skipping over the data.
 fn scan(input: &mut BufReader<File>) -> io::Result<PngMeta> {
@@ -680,6 +693,7 @@ fn scan(input: &mut BufReader<File>) -> io::Result<PngMeta> {
             }
             (_, Some(Payload::Exif)) => found.exif = true,
             (_, Some(Payload::Xmp)) => found.xmp = true,
+            (kind, None) if !STRUCTURE_CHUNKS.contains(&kind) => found.other_metadata = true,
             _ => {}
         }
         input.seek_relative(chunk.remaining() as i64)?;
