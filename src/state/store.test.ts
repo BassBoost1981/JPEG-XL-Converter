@@ -95,4 +95,15 @@ describe("useApp", () => {
     dispose = await useApp.getState().init();
     expect(useApp.getState().settings).toMatchObject({ preset: "hi", trashOriginals: false });
   });
+
+  it("beschädigte gespeicherte Einstellungen fallen feldweise auf den Standard zurück", async () => {
+    const corrupt = { ...DEFAULT_SETTINGS, preset: "ultra", mode: "x", effort: 99, output: { kind: "irgendwo" } };
+    await backend.saveSettings(corrupt as unknown as typeof DEFAULT_SETTINGS);
+    dispose();
+    dispose = await useApp.getState().init();
+    expect(useApp.getState().settings).toEqual(DEFAULT_SETTINGS);
+    await useApp.getState().addPaths(["x"]);
+    await useApp.getState().start();
+    expect(useApp.getState().run).toBe("running");
+  });
 });

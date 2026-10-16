@@ -83,3 +83,40 @@ export function toJobSettings(s: UiSettings): JobSettings {
     output: s.output,
   };
 }
+
+const pick = <T,>(value: unknown, allowed: readonly T[], fallback: T): T =>
+  allowed.includes(value as T) ? (value as T) : fallback;
+
+const intIn = (value: unknown, min: number, max: number, fallback: number): number =>
+  typeof value === "number" && Number.isInteger(value) && value >= min && value <= max ? value : fallback;
+
+const bool = (value: unknown, fallback: boolean): boolean => (typeof value === "boolean" ? value : fallback);
+
+/** Saved settings from disk: every unknown or out-of-range field falls back to its default. */
+export function restoreSettings(saved: unknown): UiSettings {
+  const s = (typeof saved === "object" && saved !== null ? saved : {}) as Record<string, unknown>;
+  const d = DEFAULT_SETTINGS;
+  const out = s.output as { kind?: unknown; path?: unknown } | null | undefined;
+  const output: OutputLocation =
+    out?.kind === "folder" && typeof out.path === "string" && out.path !== ""
+      ? { kind: "folder", path: out.path }
+      : out?.kind === "next"
+        ? { kind: "next" }
+        : d.output;
+  return {
+    mode: pick<Mode>(s.mode, ["enc", "dec"], d.mode),
+    expert: bool(s.expert, d.expert),
+    preset: pick<Preset>(s.preset, ["ll", "hi", "bal", "sm"], d.preset),
+    quality: intIn(s.quality, 30, 100, d.quality),
+    effort: intIn(s.effort, 1, 9, d.effort),
+    lossless: bool(s.lossless, d.lossless),
+    transcodeJpeg: bool(s.transcodeJpeg, d.transcodeJpeg),
+    keepMetadata: bool(s.keepMetadata, d.keepMetadata),
+    trashOriginals: bool(s.trashOriginals, d.trashOriginals),
+    decodeFormat: pick<OutputFormat>(s.decodeFormat, ["auto", "png", "jpg", "webp", "tiff"], d.decodeFormat),
+    jpegQuality: intIn(s.jpegQuality, 50, 100, d.jpegQuality),
+    bitDepth: pick<8 | 16>(s.bitDepth, [8, 16], d.bitDepth),
+    output,
+    theme: pick<UiSettings["theme"]>(s.theme, ["light", "dark", null], d.theme),
+  };
+}

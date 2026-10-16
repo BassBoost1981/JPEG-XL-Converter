@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, distanceFromQuality, enterExpert, toJobSettings } from "./settings";
+import { DEFAULT_SETTINGS, distanceFromQuality, enterExpert, restoreSettings, toJobSettings } from "./settings";
 
 describe("distanceFromQuality", () => {
   it("d = 0,1 + (100 − q) · 0,09, q = 100 → 0", () => {
@@ -56,5 +56,48 @@ describe("enterExpert", () => {
     });
     expect(enterExpert({ ...DEFAULT_SETTINGS, preset: "ll" })).toMatchObject({ quality: 100, lossless: true });
     expect(enterExpert({ ...DEFAULT_SETTINGS, preset: "sm" })).toMatchObject({ quality: 72, effort: 8 });
+  });
+});
+
+describe("restoreSettings", () => {
+  it("übernimmt gültige gespeicherte Werte", () => {
+    const saved = {
+      ...DEFAULT_SETTINGS,
+      mode: "dec",
+      preset: "sm",
+      quality: 55,
+      effort: 3,
+      decodeFormat: "tiff",
+      bitDepth: 8,
+      output: { kind: "folder", path: "D:\Ziel" },
+      theme: "dark",
+    };
+    expect(restoreSettings(saved)).toEqual(saved);
+  });
+
+  it("setzt ungültige Felder einzeln auf den Standard zurück", () => {
+    const corrupt = {
+      mode: "beides",
+      expert: "ja",
+      preset: "ultra",
+      quality: 500,
+      effort: 2.5,
+      lossless: false,
+      decodeFormat: "gif",
+      jpegQuality: -1,
+      bitDepth: 12,
+      output: { kind: "folder" },
+      theme: "lila",
+      fremd: 1,
+    };
+    const s = restoreSettings(corrupt);
+    expect(s).toEqual({ ...DEFAULT_SETTINGS, lossless: false });
+    expect(() => toJobSettings(s)).not.toThrow();
+  });
+
+  it("verträgt Unsinn statt eines Objekts", () => {
+    expect(restoreSettings(null)).toEqual(DEFAULT_SETTINGS);
+    expect(restoreSettings("kaputt")).toEqual(DEFAULT_SETTINGS);
+    expect(restoreSettings({ output: null })).toEqual(DEFAULT_SETTINGS);
   });
 });

@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { backend } from "../api";
 import type { ItemEvent, ItemStatus, Mode, PauseReason, QueueItem, RunSummary, ToolStatus } from "../api/types";
 import type { RunState } from "../lib/format";
-import { DEFAULT_SETTINGS, toJobSettings, type UiSettings } from "./settings";
+import { DEFAULT_SETTINGS, restoreSettings, toJobSettings, type UiSettings } from "./settings";
 
 export type Row = QueueItem & {
   status: ItemStatus;
@@ -209,7 +209,7 @@ export const useApp = create<AppState>()((set, get) => ({
     try {
       const saved = await backend.loadSettings();
       // The recycle-bin switch always starts off (Global Constraints).
-      if (saved) set({ settings: { ...DEFAULT_SETTINGS, ...saved, trashOriginals: false } });
+      if (saved) set({ settings: { ...restoreSettings(saved), trashOriginals: false } });
     } catch {
       // Unreadable settings: keep defaults.
     }
