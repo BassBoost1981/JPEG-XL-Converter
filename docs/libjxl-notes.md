@@ -204,3 +204,26 @@ Beim GIF zählen Kommentare und unbekannte Anwendungs-Erweiterungen (z. B. XMP),
 - Ein GIF mit zwei Bildern wird zu einer animierten JXL. `djxl` schreibt daraus eine APNG,
   deren erstes Bild pixelgleich mit dem ersten Bild des GIF ist. Geprüft wird nur dieses
   erste Bild, deshalb wandert ein animiertes Original nie in den Papierkorb (Ruling R17).
+
+## Belastungstest und Anzahl der Worker (Task 19)
+
+Messung mit `scripts/make-stress-set.ps1` (Beispiele `make_stress_set` und `stress_run`): 1.000 Bilder
+(820 JPEG, 120 PNG, 60 TIFF, 2–12 MP, 25 Ordner mit teils Unterordner, zusammen 3,55 GB),
+Ausgewogen (d 1.2, e 7), JPEG-Umpacken an, Metadaten an, Papierkorb-Attrappe, Ausgabe in einen
+anderen Ordner. Rechner: 24 logische Prozessoren, `cjxl`/`djxl` mit je `--num_threads=2`.
+
+| Worker | Dauer | Dateien/s |
+|---|---|---|
+| 6 | 138,7 s | 7,2 |
+| 12 (= `default_workers()`) | 105,4 s | 9,5 |
+| 24 | 86,6 s | 11,5 |
+
+Ergebnis in allen Läufen: 1.000 fertig, 0 Fehler, 3.545.709.562 → 822.334.671 Bytes (23,2 %);
+`bytes_out` der Zusammenfassung ist gleich der Summe der erzeugten `.jxl`-Dateien. Der höchste
+gleichzeitige Worker-Stand war jeweils genau die eingestellte Zahl.
+
+Entscheidung: `default_workers()` bleibt bei **halben logischen Prozessoren**. 24 Worker sind nur
+etwa 18 % schneller, belegen aber mit 48 Tool-Threads alle Kerne und lassen weder der Oberfläche
+noch dem Rest des Rechners Luft (und vervielfachen den Speicherbedarf bei 12-MP-Bildern). 12 Worker
+sind bereits ~32 % schneller als 6 und lassen den Rechner bedienbar. Ein klar besserer Wert
+ergibt sich aus der Messung nicht.
