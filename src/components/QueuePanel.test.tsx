@@ -160,6 +160,25 @@ describe("QueuePanel", () => {
     expect(thumb).toHaveBeenCalledTimes(rendered);
   });
 
+  it("begrenzt Vorschaubild-Anfragen auf 3 gleichzeitig und verwirft wartende beim Ausblenden", async () => {
+    const resolvers: Array<(u: string) => void> = [];
+    const thumb = vi.spyOn(backend, "thumbnail").mockImplementation(
+      () => new Promise<string>((resolve) => resolvers.push(resolve)),
+    );
+    useApp.setState({ queues: { enc: Array.from({ length: 2000 }, (_, i) => row(400_000 + i)), dec: [] } });
+    const { unmount } = render(<QueuePanel />);
+    expect(screen.getAllByTestId("queue-row").length).toBeGreaterThan(3);
+    await vi.waitFor(() => expect(thumb).toHaveBeenCalledTimes(3));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(thumb).toHaveBeenCalledTimes(3);
+
+    // Rows unmount before their turn: finishing the running ones must not start the queued ones.
+    unmount();
+    resolvers.forEach((r) => r("data:image/png;base64,AA=="));
+    await new Promise((r) => setTimeout(r, 20));
+    expect(thumb).toHaveBeenCalledTimes(3);
+  });
+
   it("behält die Endungskachel, wenn das Vorschaubild fehlschlägt", async () => {
     const thumb = vi.spyOn(backend, "thumbnail").mockRejectedValue(new Error("kaputt"));
     useApp.setState({ queues: { enc: [row(300_001)], dec: [] } });

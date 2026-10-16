@@ -86,7 +86,6 @@ export function QueuePanel() {
                 <QueueRow
                   key={row.id}
                   row={row}
-                  mode={mode}
                   selected={row.id === selectedId}
                   style={{ height: v.size, transform: `translateY(${v.start}px)` }}
                   onSelect={select}

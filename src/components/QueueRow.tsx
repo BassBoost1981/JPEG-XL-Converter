@@ -1,7 +1,7 @@
 import { Tooltip } from "@heroui/react";
 import { memo, useEffect, useState, type CSSProperties } from "react";
 import { backend } from "../api";
-import type { ItemStatus, Mode } from "../api/types";
+import type { ItemStatus } from "../api/types";
 import { formatDelta, formatSize } from "../lib/format";
 import type { Row } from "../state/store";
 
@@ -9,26 +9,76 @@ export const ROW_HEIGHT = 54;
 export const GRID_COLUMNS = "40px minmax(0,1fr) 80px 80px 72px 110px";
 
 // One lookup per item id, failures included: scrolling back never asks the backend again.
-const thumbCache = new Map<number, Promise<string | null>>();
+// At most MAX_THUMBS requests run at once; a request still waiting for its turn is dropped
+// when its row unmounts (fast scrolling), a started one finishes and fills the cache.
+const MAX_THUMBS = 3;
 
-function loadThumb(id: number): Promise<string | null> {
-  let p = thumbCache.get(id);
-  if (!p) {
-    p = backend.thumbnail(id).catch(() => null);
-    thumbCache.set(id, p);
+interface ThumbJob {
+  id: number;
+  promise: Promise<string | null>;
+  start(): void;
+  refs: number;
+  started: boolean;
+}
+
+const thumbJobs = new Map<number, ThumbJob>();
+const thumbQueue: ThumbJob[] = [];
+let thumbsInFlight = 0;
+
+function pumpThumbs(): void {
+  while (thumbsInFlight < MAX_THUMBS && thumbQueue.length > 0) thumbQueue.shift()!.start();
+}
+
+function requestThumb(id: number): ThumbJob {
+  let job = thumbJobs.get(id);
+  if (!job) {
+    let resolve!: (u: string | null) => void;
+    const promise = new Promise<string | null>((r) => (resolve = r));
+    const created: ThumbJob = {
+      id,
+      promise,
+      refs: 0,
+      started: false,
+      start() {
+        created.started = true;
+        thumbsInFlight++;
+        backend
+          .thumbnail(id)
+          .catch(() => null)
+          .then((u) => {
+            thumbsInFlight--;
+            resolve(u);
+            pumpThumbs();
+          });
+      },
+    };
+    job = created;
+    thumbJobs.set(id, job);
+    thumbQueue.push(job);
+    pumpThumbs();
   }
-  return p;
+  job.refs++;
+  return job;
+}
+
+function releaseThumb(job: ThumbJob): void {
+  if (--job.refs > 0 || job.started) return;
+  const i = thumbQueue.indexOf(job);
+  if (i >= 0) thumbQueue.splice(i, 1);
+  thumbJobs.delete(job.id);
 }
 
 function useThumb(id: number): string | null {
   const [url, setUrl] = useState<string | null>(null);
   useEffect(() => {
     let live = true;
-    void loadThumb(id).then((u) => {
+    const job = requestThumb(id);
+    void job.promise.then((u) => {
       if (live) setUrl(u);
     });
     return () => {
       live = false;
+      releaseThumb(job);
     };
   }, [id]);
   return url;
@@ -104,7 +154,6 @@ function extension(name: string): string {
 
 interface Props {
   row: Row;
-  mode: Mode;
   selected: boolean;
   style: CSSProperties;
   onSelect(id: number): void;
