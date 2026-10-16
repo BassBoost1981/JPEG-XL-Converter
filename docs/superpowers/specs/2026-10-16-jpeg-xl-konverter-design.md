@@ -42,7 +42,8 @@ Grundlage ist der Claude-Design-Entwurf `JPEG XL Konverter UI.zip` im Projektord
 - Akzentfarbe `#006FEE`, helles und dunkles Farbschema wie im Entwurf
 - Schrift Lexend; Zahlen in Tabellen und Summen mit gleich breiten Ziffern (`tabular-nums`)
 - Fenstergröße zu Beginn 1200 × 760, Mindestgröße 1000 × 640
-- Eigene Titelleiste wie im Entwurf (Logo „XL“, Modus-Umschalter, Schalter Hell/Dunkel und Experte, Fensterknöpfe); das Fenster lässt sich an der Titelleiste verschieben
+- Eigene Titelleiste wie im Entwurf (Logo, Modus-Umschalter, Schalter Hell/Dunkel und Experte, Fensterknöpfe); das Fenster lässt sich an der Titelleiste verschieben
+- Logo: `assets/jxl-logo.svg` (blaue Kachel mit „.jxl“-Wortmarke) ersetzt das „XL“-Quadrat des Entwurfs in der Titelleiste. Das Programmsymbol (Taskleiste, `.exe`) wird aus `assets/jxl-logo.png` bzw. der SVG erzeugt
 
 Alle Bedienelemente, die es in HeroUI v3 gibt, werden mit HeroUI gebaut (u. a. Tabs, Switch, Slider, Button, Card, Chip, ProgressBar, Tooltip). Selbst gebaut im gleichen Stil werden nur der **Vorher/Nachher-Schieber** und die **Titelleiste**.
 

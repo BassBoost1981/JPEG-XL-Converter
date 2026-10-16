@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">.jxl — JPEG XL Konverter</title>
+  <desc id="desc">Weiße geometrische .jxl-Wortmarke mit quadratischem Bildpixel-Punkt auf einer blauen, abgerundeten Kachel.</desc>
+  <rect width="512" height="512" rx="112" fill="#006FEE"/>
+  <g fill="#FFFFFF">
+    <rect x="72" y="294" width="38" height="38" rx="7"/>
+    <rect x="156" y="160" width="42" height="38" rx="7"/>
+    <path d="M156 218H198V311C198 346 178 364 143 364H129V326H141C152 326 156 321 156 309Z"/>
+    <path d="M228 218H270L290 250L310 218H352L312 274L354 332H311L290 298L269 332H226L268 274Z"/>
+    <path d="M382 160H422V284Q422 294 432 294H440V332H424Q382 332 382 290Z"/>
+  </g>
+</svg>
