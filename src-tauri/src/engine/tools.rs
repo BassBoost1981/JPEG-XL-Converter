@@ -6,13 +6,15 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::types::{CancelToken, ToolStatus};
 
 /// Process creation flag: no console window for the child.
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
+/// How long `--version` may take before the tool counts as broken.
+const VERSION_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Tools {
@@ -99,18 +101,48 @@ fn find_tool(dir: &Path, name: &str) -> Option<PathBuf> {
 /// (first line of the output is `cjxl v0.12.0 4128790 [...]`).
 fn tool_version(exe: &Path) -> Result<String, String> {
     let name = exe.file_name().unwrap_or_default().to_string_lossy();
-    let out = Command::new(exe)
-        .arg("--version")
+    let mut cmd = Command::new(exe);
+    cmd.arg("--version");
+    version_of(cmd, &name, VERSION_TIMEOUT)
+}
+
+/// Runs `cmd` without a console window for at most `timeout` (then it is
+/// killed) and reads the version from its output.
+fn version_of(mut cmd: Command, name: &str, timeout: Duration) -> Result<String, String> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
-        .output()
+        .spawn()
         .map_err(|e| format!("{name} startet nicht: {e}"))?;
-    let text = String::from_utf8_lossy(&out.stdout);
+    // Read stdout on its own thread so a full pipe can never block the tool.
+    let mut pipe = child.stdout.take().expect("stdout is piped");
+    let reader = thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = pipe.read_to_end(&mut buf);
+        buf
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => thread::sleep(POLL_INTERVAL),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{name} antwortet nicht."));
+            }
+        }
+    };
+    let out = reader.join().unwrap_or_default();
+    let text = String::from_utf8_lossy(&out);
     let version = text.split_whitespace().find_map(|w| {
         w.strip_prefix('v')
             .filter(|v| v.starts_with(|c: char| c.is_ascii_digit()))
     });
     match version {
-        Some(v) if out.status.success() => Ok(v.to_string()),
+        Some(v) if status.success() => Ok(v.to_string()),
         _ => Err(format!("{name} liefert keine Versionsangabe.")),
     }
 }
@@ -287,6 +319,21 @@ mod tests {
         assert!(s.ok, "{s:?}");
         assert!(s.cjxl_version.as_deref().unwrap().contains("0.12"), "{s:?}");
         assert!(s.djxl_version.as_deref().unwrap().contains("0.12"), "{s:?}");
+    }
+
+    #[test]
+    fn version_check_gives_up_on_a_hanging_tool() {
+        // ping waits a second between its echoes: about 5 s in all.
+        let mut cmd = Command::new("ping");
+        cmd.args(["-n", "6", "127.0.0.1"]);
+        let start = Instant::now();
+        let err = version_of(cmd, "ping.exe", Duration::from_millis(200)).unwrap_err();
+        assert_eq!(err, "ping.exe antwortet nicht.");
+        assert!(
+            start.elapsed() < Duration::from_secs(3),
+            "{:?}",
+            start.elapsed()
+        );
     }
 
     #[test]
