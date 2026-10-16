@@ -21,12 +21,28 @@ mit `.\scripts\package-portable.ps1`.
       TIFF, einige mit Umlauten im Namen, einige in Unterordnern) **kopieren**, z. B. nach
       `D:\Test\Fotos-Kopie`. Alles Weitere passiert nur an dieser Kopie.
 - [ ] Ein zweites Mal kopieren, z. B. nach `D:\Test\Fotos-Kopie2` (für Schritt 3).
-- [ ] Hash-Liste der Originale in der Kopie merken:
+- [ ] Hash-Liste aller JPEG-Originale der Kopie (`*.jpg` und `*.jpeg`, auch in Unterordnern)
+      mit relativem Pfad in `D:\Test\hashes-vorher.csv` ablegen. PowerShell (Windows PowerShell 5.1
+      genügt), Pfad `$quelle` anpassen:
 
   ```powershell
-  Get-ChildItem D:\Test\Fotos-Kopie -Recurse -File |
-      Get-FileHash | Export-Csv D:\Test\hashes-vorher.csv -NoTypeInformation
+  function Get-Hashliste($ordner, $endungen) {
+      Push-Location -LiteralPath $ordner
+      try {
+          Get-ChildItem -Recurse -File | Where-Object { $_.Extension -in $endungen } | ForEach-Object {
+              [pscustomobject]@{
+                  Pfad = (Resolve-Path -LiteralPath $_.FullName -Relative).Substring(2)
+                  Hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+              }
+          }
+      } finally { Pop-Location }
+  }
+  $quelle = "D:\Test\Fotos-Kopie"
+  Get-Hashliste $quelle ".jpg", ".jpeg" | Export-Csv "D:\Test\hashes-vorher.csv" -NoTypeInformation -Encoding UTF8
+  "{0} Originale erfasst" -f @(Import-Csv "D:\Test\hashes-vorher.csv").Count
   ```
+
+  Die Anzahl muss der Zahl der JPEGs im Ordner entsprechen. Die CSV wird in Schritt 4 gebraucht.
 
 ## 2. Durchlauf ohne Papierkorb
 
@@ -67,22 +83,37 @@ mit `.\scripts\package-portable.ps1`.
 
 ## 4. Rückwandlung „Automatisch“ und Byte-Vergleich
 
-- [ ] Modus „Aus JPEG XL“, Ausgabeformat „Automatisch“.
-- [ ] In `Fotos-Kopie` (aus Schritt 2) die vom Programm erzeugten `.jxl` hineinziehen. Zuvor
-      die ursprünglichen JPEGs aus der Kopie in einen anderen Ordner verschieben
-      (z. B. `D:\Test\Originale-JPG`), damit nichts „Übersprungen“ wird.
-      Alternativ als Ausgabeziel „Ordner wählen …“ nutzen, z. B. `D:\Test\Zurück`.
-- [ ] Umwandeln. Für aus JPEG umgepackte Dateien erscheint der Hinweis, dass sie bit-genau
-      als Original-JPEG wiederhergestellt werden.
-- [ ] Byte-Vergleich, JPEG-Dateien vorher und nachher:
+Die Rückwandlung läuft in einen **eigenen Ausgabeordner**, damit nichts „Übersprungen“ wird und
+der Vergleich eindeutig ist. Grundlage ist `Fotos-Kopie` aus Schritt 2 (dort liegen die `.jxl`)
+und die CSV aus Schritt 1.
+
+- [ ] Modus „Aus JPEG XL“, Ausgabeformat „Automatisch“. Ausgabeordner: „Ordner wählen …“ →
+      `D:\Test\Zurück` (neuer, leerer Ordner).
+- [ ] `Fotos-Kopie` ins Fenster ziehen (aufgenommen werden nur die `.jxl`), umwandeln.
+      Für aus JPEG umgepackte Dateien erscheint der Hinweis, dass sie bit-genau als Original-JPEG
+      wiederhergestellt werden. Das Programm legt die Ordnerstruktur samt Namen des gezogenen
+      Ordners an: `D:\Test\Zurück\Fotos-Kopie…`.
+- [ ] Byte-Vergleich gegen die CSV (relativer Pfad ohne Endung + Hash; ein Original `.jpeg`
+      kommt als `.jpg` zurück und gilt trotzdem als gleich). `Get-Hashliste` aus Schritt 1
+      muss in dieser PowerShell-Sitzung noch definiert sein, sonst den Funktionsblock aus Schritt 1
+      erneut einfügen:
 
   ```powershell
-  $vorher  = Get-ChildItem D:\Test\Originale-JPG -Recurse -Filter *.jpg | Get-FileHash
-  $nachher = Get-ChildItem D:\Test\Zurück       -Recurse -Filter *.jpg | Get-FileHash
-  Compare-Object $vorher $nachher -Property Hash   # keine Ausgabe = alle identisch
+  $vorher  = Import-Csv "D:\Test\hashes-vorher.csv"
+  $nachher = Get-Hashliste "D:\Test\Zurück\Fotos-Kopie" ".jpg", ".jpeg"
+  $a = @{}; foreach ($e in $vorher)  { $a[[IO.Path]::ChangeExtension($e.Pfad, $null).TrimEnd(".").ToLowerInvariant()] = $e.Hash }
+  $b = @{}; foreach ($e in $nachher) { $b[[IO.Path]::ChangeExtension($e.Pfad, $null).TrimEnd(".").ToLowerInvariant()] = $e.Hash }
+  "Vorher: $($a.Count) Dateien, nachher: $($b.Count) Dateien"
+  $unterschiede = foreach ($k in ($a.Keys + $b.Keys | Sort-Object -Unique)) {
+      if (-not $b.ContainsKey($k))     { "FEHLT nachher:   $k" }
+      elseif (-not $a.ContainsKey($k)) { "ZUVIEL nachher:  $k" }
+      elseif ($a[$k] -ne $b[$k])       { "UNTERSCHIEDLICH: $k" }
+  }
+  if ($unterschiede) { $unterschiede } else { "alles gleich" }
   ```
 
-  Es darf **kein** Unterschied erscheinen (Dateinamen und Anzahl gleich).
+  Erwartet: gleiche Anzahl auf beiden Seiten und die Ausgabe `alles gleich`. Jede andere Zeile
+  (`FEHLT`, `ZUVIEL`, `UNTERSCHIEDLICH`) ist ein Fehler, der gemeldet werden muss.
 - [ ] PNG/TIFF, verlustfrei umgewandelt und zurück: Bilder sehen gleich aus und haben gleiche
       Pixelmaße (die Bytes können abweichen, die Pixel nicht).
 
@@ -106,7 +137,7 @@ mit `.\scripts\package-portable.ps1`.
 
 Erst wenn **alle** Haken oben gesetzt sind:
 
-- [ ] Backup des Archivs vorhanden (oder zumindest Papierkorb-Schalter noch aus).
+- [ ] Ein Backup des Archivs ist vorhanden (echte, getrennte Kopie, z. B. auf einer externen Platte).
 - [ ] Zuerst einen einzelnen echten Unterordner umwandeln, Ergebnis prüfen.
 - [ ] Dann das ganze Archiv, zunächst ohne Papierkorb, danach (wenn alles passt) mit Papierkorb.
 - [ ] Papierkorb nicht sofort leeren; erst nach einigen Tagen, wenn die `.jxl` sich im Alltag
