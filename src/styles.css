@@ -1,0 +1,6 @@
+@import "tailwindcss";
+@import "@heroui/styles";
+@theme { --font-sans: "Lexend Variable", ui-sans-serif, system-ui, sans-serif; }
+:root, .light { --accent: #006FEE; --accent-foreground: #ffffff; }
+.dark { --accent: #338ef7; --accent-foreground: #ffffff; }
+body { font-variant-numeric: tabular-nums; }

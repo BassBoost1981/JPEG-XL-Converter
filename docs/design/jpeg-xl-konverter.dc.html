@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Lexend:wght@300;400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#d9d7d3;font-family:'Lexend',sans-serif;color:#1d1c1a;-webkit-font-smoothing:antialiased}
+a{color:#005fb8}a:hover{color:#003f7a}
+button{font:inherit}
+</style>
+</helmet>
+<section style="padding:56px;display:flex;flex-direction:column;gap:28px">
+<div id="2a" style="display:flex;flex-direction:column;gap:12px;font-family:'Lexend',sans-serif">
+  <div style="display:flex;align-items:center;gap:10px">
+    <span style="font:600 13px 'IBM Plex Mono',monospace;background:#1d1c1a;color:#fff;padding:3px 8px;border-radius:4px">2a</span>
+    <span style="font-size:15px;font-weight:600">HeroUI · Hell / Dunkel</span>
+  </div>
+  <div data-screen-label="2a HeroUI" style="width:1200px;height:760px;background:{{ h.th.bg }};color:{{ h.th.fg }};font-family:'Lexend',sans-serif;font-size:14px;border-radius:14px;border:1px solid {{ h.th.winBd }};box-shadow:0 24px 60px rgba(0,0,0,.22);display:flex;flex-direction:column;overflow:hidden;transition:background .2s,color .2s">
+    <div style="height:64px;flex:none;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:0 0 0 20px;border-bottom:1px solid {{ h.th.line }};background:{{ h.th.card }}">
+      <div style="display:flex;align-items:center;gap:10px">
+        <div style="width:32px;height:32px;border-radius:10px;background:#006FEE;color:#fff;font-size:12px;font-weight:700;display:flex;align-items:center;justify-content:center">XL</div>
+        <span style="font-weight:600;font-size:16px">JPEG XL</span>
+      </div>
+      <div style="display:flex;gap:2px;padding:4px;background:{{ h.th.d100 }};border-radius:12px">
+        <button onClick="{{ h.setEnc }}" style="border:0;cursor:pointer;font-size:14px;padding:7px 16px;border-radius:8px;background:{{ h.encBg }};color:{{ h.encFg }};box-shadow:{{ h.encSh }}">In JPEG XL</button>
+        <button onClick="{{ h.setDec }}" style="border:0;cursor:pointer;font-size:14px;padding:7px 16px;border-radius:8px;background:{{ h.decBg }};color:{{ h.decFg }};box-shadow:{{ h.decSh }}">Aus JPEG XL</button>
+      </div>
+      <div style="display:flex;align-items:center;justify-content:flex-end;gap:18px;height:100%">
+        <div style="display:flex;align-items:center;gap:8px"><span style="font-size:13px;color:{{ h.th.muted }}">{{ h.themeLabel }}</span>
+          <button onClick="{{ h.tDark.onClick }}" style="position:relative;width:44px;height:24px;border-radius:12px;border:0;background:{{ h.tDark.bg }};padding:0;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ h.tDark.kl }};width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></button></div>
+        <div style="display:flex;align-items:center;gap:8px"><span style="font-size:13px;color:{{ h.th.muted }}">Experte</span>
+          <button onClick="{{ h.tExp.onClick }}" style="position:relative;width:44px;height:24px;border-radius:12px;border:0;background:{{ h.tExp.bg }};padding:0;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ h.tExp.kl }};width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></button></div>
+        <div style="display:flex;height:100%;font-size:12px;color:{{ h.th.muted }}"><div style="width:46px;display:flex;align-items:center;justify-content:center">—</div><div style="width:46px;display:flex;align-items:center;justify-content:center">▢</div><div style="width:46px;display:flex;align-items:center;justify-content:center">✕</div></div>
+      </div>
+    </div>
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:16px;padding:16px">
+      <div style="display:flex;flex-direction:column;gap:16px;min-height:0">
+        <div style="flex:none;background:{{ h.th.card }};border-radius:14px;box-shadow:{{ h.th.sh }};padding:12px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:flex;align-items:center;gap:8px;padding:2px 4px"><span style="font-weight:600">Vorher / Nachher</span><span style="font-size:12px;color:{{ h.th.muted }}">{{ h.selName }} · {{ h.selDims }}</span></div>
+          <div style="position:relative;height:240px;border-radius:10px;overflow:hidden">
+            <div style="position:absolute;inset:0;background:repeating-linear-gradient(135deg,{{ h.th.stA }} 0 10px,{{ h.th.stB }} 10px 20px)"></div>
+            <div style="position:absolute;inset:0;clip-path:inset(0 0 0 {{ h.splitPct }});background:repeating-linear-gradient(45deg,{{ h.th.st2A }} 0 10px,{{ h.th.st2B }} 10px 20px)"></div>
+            <div style="position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-family:'IBM Plex Mono',monospace;font-size:12px;color:{{ h.th.muted }};pointer-events:none">Bildausschnitt 100 %</div>
+            <span style="position:absolute;left:10px;top:10px;font-size:12px;background:{{ h.th.overlay }};padding:4px 10px;border-radius:999px;pointer-events:none">{{ h.leftTag }}</span>
+            <span style="position:absolute;right:10px;top:10px;font-size:12px;background:#006FEE;color:#fff;padding:4px 10px;border-radius:999px;pointer-events:none">{{ h.rightTag }}</span>
+            <div style="position:absolute;top:0;bottom:0;left:{{ h.splitPct }};width:2px;margin-left:-1px;background:#fff;pointer-events:none">
+              <div style="position:absolute;top:50%;left:50%;width:28px;height:28px;margin:-14px 0 0 -14px;border-radius:50%;background:#fff;color:#11181C;box-shadow:0 2px 8px rgba(0,0,0,.25);display:flex;align-items:center;justify-content:center;font-size:12px">⇔</div>
+            </div>
+            <input type="range" min="0" max="100" value="{{ h.split }}" onChange="{{ h.onSplit }}" style="position:absolute;inset:0;width:100%;height:100%;margin:0;opacity:0;cursor:ew-resize">
+          </div>
+        </div>
+        <div style="flex:1;min-height:0;background:{{ h.th.card }};border-radius:14px;box-shadow:{{ h.th.sh }};display:flex;flex-direction:column">
+          <div style="flex:none;display:flex;align-items:center;gap:8px;padding:14px 16px 10px">
+            <span style="font-weight:600;font-size:15px">Warteschlange</span>
+            <span style="font-size:12px;padding:2px 8px;border-radius:999px;background:{{ h.th.d100 }};color:{{ h.th.muted }}">{{ h.count }}</span>
+            <div style="flex:1"></div>
+            <button onClick="{{ h.addFolder }}" style="border:2px solid {{ h.th.d200 }};background:transparent;color:{{ h.th.fg }};cursor:pointer;font-size:13px;padding:5px 12px;border-radius:10px">Dateien</button>
+            <button onClick="{{ h.addFolder }}" style="border:0;background:{{ h.th.infoBg }};color:{{ h.th.infoFg }};cursor:pointer;font-size:13px;padding:7px 14px;border-radius:10px">Ordner hinzufügen</button>
+            <button onClick="{{ h.clear }}" style="border:0;background:transparent;color:#f31260;cursor:pointer;font-size:13px;padding:7px 10px;border-radius:10px">Leeren</button>
+          </div>
+          <div style="flex:none;display:grid;grid-template-columns:40px minmax(0,1fr) 80px 80px 72px 110px;gap:12px;margin:0 12px;padding:8px 10px;border-radius:8px;background:{{ h.th.d100 }};font-size:11px;font-weight:600;color:{{ h.th.muted }};text-transform:uppercase;letter-spacing:.03em">
+            <span></span><span>Datei</span><span>Original</span><span>Ergebnis</span><span>{{ h.sizeLabel }}</span><span>Status</span>
+          </div>
+          <div style="flex:1;min-height:0;overflow:auto;padding:4px 12px 12px">
+            <sc-if value="{{ h.noRows }}" hint-placeholder-val="{{ false }}">
+              <div style="margin-top:10px;height:140px;border:2px dashed {{ h.th.d200 }};border-radius:14px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;color:{{ h.th.muted }}">
+                <span style="font-weight:600;color:{{ h.th.fg }}">Bilder oder Ordner hierher ziehen</span><span style="font-size:12px">{{ h.dropHint }}</span>
+              </div>
+            </sc-if>
+            <sc-for list="{{ h.rows }}" as="r" hint-placeholder-count="6">
+              <div onClick="{{ r.onClick }}" style="display:grid;grid-template-columns:40px minmax(0,1fr) 80px 80px 72px 110px;gap:12px;align-items:center;padding:7px 10px;border-radius:10px;background:{{ r.bg }};cursor:pointer;margin-top:2px">
+                <div style="width:40px;height:40px;border-radius:10px;background:repeating-linear-gradient(135deg,{{ h.th.stA }} 0 4px,{{ h.th.stB }} 4px 8px);display:flex;align-items:flex-end;justify-content:center;padding-bottom:3px;box-sizing:border-box"><span style="font-size:8px;font-weight:600;color:{{ h.th.muted }}">{{ r.ext }}</span></div>
+                <div style="min-width:0"><div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:14px">{{ r.file }}</div><div style="font-size:12px;color:{{ h.th.muted }}">{{ r.dims }}</div></div>
+                <span style="font-size:13px;font-variant-numeric:tabular-nums">{{ r.inSize }}</span>
+                <span style="font-size:13px;font-variant-numeric:tabular-nums">{{ r.outSize }}</span>
+                <span style="justify-self:start;font-size:12px;font-weight:500;padding:2px 8px;border-radius:999px;background:{{ r.dBg }};color:{{ r.dFg }};font-variant-numeric:tabular-nums">{{ r.delta }}</span>
+                <div style="display:flex;flex-direction:column;gap:5px"><span style="align-self:flex-start;font-size:12px;padding:1px 8px;border-radius:999px;background:{{ r.stBg }};color:{{ r.stColor }}">{{ r.stLabel }}</span><div style="height:4px;border-radius:999px;background:{{ h.th.d200 }};overflow:hidden"><div style="height:100%;width:{{ r.pPct }};background:{{ r.stColor }};border-radius:999px"></div></div></div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </div>
+      <div style="min-height:0;background:{{ h.th.card }};border-radius:14px;box-shadow:{{ h.th.sh }};display:flex;flex-direction:column">
+        <div style="flex:1;min-height:0;overflow:auto;padding:18px;display:flex;flex-direction:column;gap:18px">
+          <div style="display:flex;flex-direction:column;gap:2px"><span style="font-weight:600;font-size:17px">Einstellungen</span><span style="font-size:12px;color:{{ h.th.muted }}">{{ h.modeTitle }}</span></div>
+          <sc-if value="{{ h.isEnc }}" hint-placeholder-val="{{ true }}">
+            <sc-if value="{{ h.simple }}" hint-placeholder-val="{{ true }}">
+              <div style="display:flex;flex-direction:column;gap:8px"><span style="font-size:13px;color:{{ h.th.muted }}">Qualität</span>
+                <sc-for list="{{ h.presets }}" as="p" hint-placeholder-count="4">
+                  <button onClick="{{ p.onClick }}" style="text-align:left;cursor:pointer;padding:10px 14px;border-radius:12px;border:2px solid {{ p.bd }};background:{{ p.bg }};color:{{ p.fg }};display:flex;justify-content:space-between;align-items:center;gap:8px;transition:border-color .15s"><span style="font-size:14px;font-weight:500">{{ p.label }}</span><span style="font-size:12px;color:{{ p.subFg }}">{{ p.sub }}</span></button>
+                </sc-for>
+              </div>
+            </sc-if>
+            <sc-if value="{{ h.expert }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;justify-content:space-between;font-size:14px"><span>Qualität</span><span style="color:{{ h.th.muted }};font-variant-numeric:tabular-nums">{{ h.q }} · Distanz {{ h.distText }}</span></div>
+                <input type="range" min="30" max="100" value="{{ h.q }}" onChange="{{ h.onQ }}" style="width:100%;accent-color:#006FEE;margin:0">
+              </div>
+              <div style="display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;justify-content:space-between;font-size:14px"><span>Effort</span><span style="color:{{ h.th.muted }}">{{ h.effText }}</span></div>
+                <input type="range" min="1" max="9" value="{{ h.effort }}" onChange="{{ h.onEff }}" style="width:100%;accent-color:#006FEE;margin:0">
+              </div>
+              <div style="display:flex;align-items:center;gap:12px"><div style="flex:1;display:flex;flex-direction:column;gap:2px"><span>Verlustfrei</span><span style="font-size:12px;color:{{ h.th.muted }}">Pixelgenau, ignoriert Qualität</span></div>
+                <button onClick="{{ h.tLoss.onClick }}" style="position:relative;width:44px;height:24px;border-radius:12px;border:0;background:{{ h.tLoss.bg }};padding:0;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ h.tLoss.kl }};width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></button></div>
+            </sc-if>
+            <div style="display:flex;align-items:center;gap:12px"><div style="flex:1;display:flex;flex-direction:column;gap:2px"><span>JPEGs verlustfrei transkodieren</span><span style="font-size:12px;color:{{ h.th.muted }}">~20 % kleiner, bit-genau zurückwandelbar</span></div>
+              <button onClick="{{ h.tTrans.onClick }}" style="position:relative;width:44px;height:24px;border-radius:12px;border:0;background:{{ h.tTrans.bg }};padding:0;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ h.tTrans.kl }};width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></button></div>
+          </sc-if>
+          <sc-if value="{{ h.isDec }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex;flex-direction:column;gap:8px"><span style="font-size:13px;color:{{ h.th.muted }}">Zielformat</span>
+              <button onClick="{{ h.fmtAuto.onClick }}" style="cursor:pointer;text-align:left;padding:10px 12px;border-radius:12px;border:2px solid {{ h.fmtAuto.bd }};background:{{ h.fmtAuto.bg }};color:{{ h.fmtAuto.fg }};display:flex;flex-direction:column;gap:2px"><span style="font-size:14px;font-weight:600">{{ h.fmtAuto.label }}</span><span style="font-size:11px;color:{{ h.fmtAuto.subFg }}">{{ h.fmtAuto.sub }}</span></button>
+              <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:8px"><sc-for list="{{ h.fmts }}" as="p" hint-placeholder-count="4"><button onClick="{{ p.onClick }}" style="cursor:pointer;text-align:left;padding:10px 12px;border-radius:12px;border:2px solid {{ p.bd }};background:{{ p.bg }};color:{{ p.fg }};display:flex;flex-direction:column;gap:2px"><span style="font-size:14px;font-weight:600">{{ p.label }}</span><span style="font-size:11px;color:{{ p.subFg }}">{{ p.sub }}</span></button></sc-for></div></div>
+            <sc-if value="{{ h.showRecon }}" hint-placeholder-val="{{ false }}">
+              <div style="font-size:12px;background:{{ h.th.infoBg }};color:{{ h.th.infoFg }};padding:10px 12px;border-radius:12px;text-wrap:pretty">Aus JPEG transkodierte Dateien werden bit-genau als Original-JPEG wiederhergestellt.</div>
+            </sc-if>
+            <sc-if value="{{ h.showJq }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;flex-direction:column;gap:8px"><div style="display:flex;justify-content:space-between;font-size:14px"><span>JPEG-Qualität</span><span style="color:{{ h.th.muted }}">{{ h.jq }}</span></div>
+                <input type="range" min="50" max="100" value="{{ h.jq }}" onChange="{{ h.onJq }}" style="width:100%;accent-color:#006FEE;margin:0"></div>
+            </sc-if>
+            <sc-if value="{{ h.showDepth }}" hint-placeholder-val="{{ false }}">
+              <div style="display:flex;align-items:center;gap:12px"><span style="flex:1">Bittiefe</span><div style="display:flex;gap:2px;padding:3px;background:{{ h.th.d100 }};border-radius:10px"><sc-for list="{{ h.depths }}" as="p" hint-placeholder-count="2"><button onClick="{{ p.onClick }}" style="cursor:pointer;padding:4px 12px;border-radius:7px;border:0;background:{{ p.bg }};color:{{ p.fg }};font-size:12px">{{ p.label }}</button></sc-for></div></div>
+            </sc-if>
+          </sc-if>
+          <div style="display:flex;align-items:center;gap:12px"><div style="flex:1;display:flex;flex-direction:column;gap:2px"><span>Metadaten behalten</span><span style="font-size:12px;color:{{ h.th.muted }}">EXIF, XMP, Farbprofil</span></div>
+            <button onClick="{{ h.tMeta.onClick }}" style="position:relative;width:44px;height:24px;border-radius:12px;border:0;background:{{ h.tMeta.bg }};padding:0;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ h.tMeta.kl }};width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></button></div>
+          <button onClick="{{ h.cycleOut }}" style="text-align:left;cursor:pointer;border:0;background:{{ h.th.d100 }};color:{{ h.th.fg }};border-radius:12px;padding:8px 12px;display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:{{ h.th.muted }}">Ausgabeordner · klicken zum Ändern</span><span style="font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%">{{ h.outPath }}</span></button>
+          <div style="display:flex;align-items:center;gap:12px"><div style="flex:1;display:flex;flex-direction:column;gap:2px"><span>Originale nach Prüfung in den Papierkorb</span><span style="font-size:12px;color:{{ h.th.muted }}">Erst wenn die neue Datei erfolgreich gelesen wurde</span></div>
+            <button onClick="{{ h.tTrash.onClick }}" style="position:relative;width:44px;height:24px;border-radius:12px;border:0;background:{{ h.tTrash.bg }};padding:0;cursor:pointer;flex:none;transition:background .2s"><span style="position:absolute;top:3px;left:{{ h.tTrash.kl }};width:18px;height:18px;border-radius:50%;background:#fff;box-shadow:0 1px 3px rgba(0,0,0,.25);transition:left .2s"></span></button></div>
+        </div>
+        <div style="flex:none;border-top:1px solid {{ h.th.line }};padding:16px 18px;display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-size:12px;color:{{ h.th.muted }};text-wrap:pretty">{{ h.totSub }}</span><span style="font-size:22px;font-weight:600;color:{{ h.totColor }}">{{ h.totDelta }}</span></div>
+          <div style="height:8px;border-radius:999px;background:{{ h.th.d200 }};overflow:hidden"><div style="height:100%;width:{{ h.progPct }};background:#006FEE;border-radius:999px"></div></div>
+          <button onClick="{{ h.run }}" style="border:0;cursor:pointer;background:#006FEE;color:#fff;font-size:15px;font-weight:500;padding:0 16px;height:48px;border-radius:14px;box-shadow:0 6px 16px rgba(0,111,238,.35)" style-hover="opacity:.9">{{ h.cta }}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const ENC=[
+ {n:'DSC_4021',e:'jpg',s:6.8,d:'6000 × 4000'},
+ {n:'DSC_4022',e:'jpg',s:7.1,d:'6000 × 4000'},
+ {n:'Panorama_Alpen',e:'tif',s:142.3,d:'14200 × 3800'},
+ {n:'Portrait_Lena',e:'jpg',s:5.3,d:'4000 × 6000'},
+ {n:'Screenshot_2026-10-12',e:'png',s:2.4,d:'2560 × 1440'},
+ {n:'Logo_Export',e:'png',s:0.38,d:'1200 × 1200'}];
+const ENC_X=[{n:'Urlaub_0',e:'jpg',s:4.9,d:'5472 × 3648'},{n:'Urlaub_0',e:'jpg',s:5.6,d:'5472 × 3648'},{n:'Scan_Seite_',e:'png',s:11.2,d:'4960 × 7016'}];
+const DEC=[
+ {n:'DSC_4021',o:'jpg',s:5.4,d:'6000 × 4000'},
+ {n:'DSC_4022',o:'jpg',s:5.7,d:'6000 × 4000'},
+ {n:'Panorama_Alpen',o:'tif',s:31.6,d:'14200 × 3800'},
+ {n:'Portrait_Lena',o:'jpg',s:4.2,d:'4000 × 6000'},
+ {n:'Screenshot_2026-10-12',o:'png',s:0.9,d:'2560 × 1440'},
+ {n:'Logo_Export',o:'png',s:0.12,d:'1200 × 1200'}];
+const DEC_X=[{n:'Archiv_0',o:'jpg',s:3.1,d:'4032 × 3024'},{n:'Archiv_0',o:'png',s:1.8,d:'3000 × 2000'},{n:'Archiv_0',o:'jpg',s:2.7,d:'4032 × 3024'}];
+const PRESETS=[
+ {id:'ll',label:'Verlustfrei',sub:'empfohlen · pixelgenau',q:100,e:7,ll:true},
+ {id:'hi',label:'Hohe Qualität',sub:'d 0.5',q:95,e:7},
+ {id:'bal',label:'Ausgewogen',sub:'d 1.2',q:88,e:7},
+ {id:'sm',label:'Klein',sub:'d 2.6',q:72,e:8}];
+const FMTS=[{id:'png',label:'PNG',sub:'verlustfrei'},{id:'jpg',label:'JPEG',sub:'kompatibel'},{id:'webp',label:'WebP',sub:'Web'},{id:'tiff',label:'TIFF',sub:'Druck'}];
+const EFF=['','Lightning','Thunder','Falcon','Cheetah','Hare','Wombat','Squirrel','Kitten','Tortoise'];
+const OUTS=['Neben der Originaldatei','C:\\Users\\Lena\\Bilder\\JPEG XL','D:\\Export\\2026-10'];
+const TH={
+ a:{acc:'#005fb8',accFg:'#ffffff',selBg:'#e5eef8',rowBg:'transparent',idleBd:'transparent',good:'#0f7b0f',muted:'#616161',done:'#0f7b0f',run:'#005fb8',wait:'#616161',tabOnBg:'#ffffff',tabOffBg:'transparent',tabOnFg:'#1a1a1a',tabOffFg:'#5f5f5f',tabOnSh:'0 1px 2px rgba(0,0,0,.14)',togOffBg:'#f6f6f6',togOffBd:'#8a8a8a',togOffK:'#5c5c5c',cbOff:'#ffffff',optOnBg:'#eaf2fb',optOffBg:'#ffffff',optOnBd:'#005fb8',optOffBd:'#e0e0e0',optOnFg:'#1a1a1a',optOffFg:'#1a1a1a',optSubOn:'#005fb8',optSubOff:'#616161'},
+ b:{acc:'#c4501c',accFg:'#ffffff',selBg:'#fbe6db',rowBg:'transparent',idleBd:'transparent',good:'#2b7a4b',muted:'#77736c',done:'#2b7a4b',run:'#c4501c',wait:'#8f8b84',tabOnBg:'#1d1c1a',tabOffBg:'#ffffff',tabOnFg:'#ffffff',tabOffFg:'#1d1c1a',tabOnSh:'none',togOffBg:'#e4e1dc',togOffBd:'#9d9890',togOffK:'#ffffff',cbOff:'#ffffff',optOnBg:'#1d1c1a',optOffBg:'#ffffff',optOnBd:'#1d1c1a',optOffBd:'#d3cfc9',optOnFg:'#ffffff',optOffFg:'#1d1c1a',optSubOn:'#ffffff',optSubOff:'#77736c'},
+ c:{acc:'#5ccfc3',accFg:'#0c1514',selBg:'#232828',rowBg:'transparent',idleBd:'#2a2a2a',good:'#7fd49a',muted:'#8b8985',done:'#7fd49a',run:'#5ccfc3',wait:'#8b8985',tabOnBg:'#2e2e2e',tabOffBg:'transparent',tabOnFg:'#ffffff',tabOffFg:'#9a9893',tabOnSh:'0 1px 2px rgba(0,0,0,.5)',togOffBg:'#1a1a1a',togOffBd:'#6a6864',togOffK:'#a3a19c',cbOff:'#1a1a1a',optOnBg:'#1c302e',optOffBg:'#1f1f1f',optOnBd:'#5ccfc3',optOffBd:'#303030',optOnFg:'#ecebe8',optOffFg:'#ecebe8',optSubOn:'#5ccfc3',optSubOff:'#8b8985'}};
+const SH='0 0 5px rgba(0,0,0,.02),0 2px 10px rgba(0,0,0,.06),0 0 1px rgba(0,0,0,.3)';
+TH.h={acc:'#006FEE',accFg:'#ffffff',selBg:'#e6f1fe',rowBg:'transparent',idleBd:'transparent',good:'#12a150',muted:'#71717a',done:'#12a150',run:'#006FEE',wait:'#71717a',doneBg:'#e8faf0',runBg:'#e6f1fe',waitBg:'#f4f4f5',tabOnBg:'#ffffff',tabOffBg:'transparent',tabOnFg:'#11181C',tabOffFg:'#71717a',tabOnSh:SH,togOffBg:'#e4e4e7',togOffBd:'#e4e4e7',togOffK:'#ffffff',cbOff:'#ffffff',optOnBg:'#e6f1fe',optOffBg:'#ffffff',optOnBd:'#006FEE',optOffBd:'#e4e4e7',optOnFg:'#11181C',optOffFg:'#11181C',optSubOn:'#006FEE',optSubOff:'#71717a',
+ bg:'#fafafa',card:'#ffffff',fg:'#11181C',d100:'#f4f4f5',d200:'#e4e4e7',sh:SH,stA:'#ececee',stB:'#f4f4f5',st2A:'#dfe9f7',st2B:'#eaf1fb',goodBg:'#e8faf0',goodFg:'#0e793c',line:'#f0f0f2',overlay:'rgba(255,255,255,.9)',winBd:'#e4e4e7',infoBg:'#e6f1fe',infoFg:'#004493'};
+TH.hd={...TH.h,selBg:'#0b2440',good:'#17c964',muted:'#a1a1aa',done:'#17c964',run:'#338ef7',wait:'#a1a1aa',doneBg:'#0d2d1c',runBg:'#0b2440',waitBg:'#27272a',tabOnBg:'#3f3f46',tabOnFg:'#ECEDEE',tabOffFg:'#a1a1aa',tabOnSh:'none',togOffBg:'#3f3f46',togOffBd:'#3f3f46',cbOff:'#18181b',optOnBg:'#0b2440',optOffBg:'#18181b',optOffBd:'#3f3f46',optOnFg:'#ECEDEE',optOffFg:'#ECEDEE',optSubOn:'#66aaf9',optSubOff:'#a1a1aa',
+ bg:'#000000',card:'#18181b',fg:'#ECEDEE',d100:'#27272a',d200:'#3f3f46',sh:'none',stA:'#202023',stB:'#26262a',st2A:'#12202f',st2B:'#182838',goodBg:'#0d2d1c',goodFg:'#45d483',line:'#27272a',overlay:'rgba(0,0,0,.65)',winBd:'#27272a',infoBg:'#0b2440',infoFg:'#99c7fb'};
+const mb=v=>v<1?Math.round(v*1024)+' KB':(v<10?v.toFixed(2):v.toFixed(1)).replace('.',',')+' MB';
+const fresh=(x)=>({mode:'enc',expert:false,preset:'ll',q:100,effort:7,lossless:true,transcode:true,meta:true,trash:false,fmt:'auto',jq:92,depth:8,sel:0,split:50,out:0,running:false,added:0,files:{enc:ENC.map(f=>({...f,p:0})),dec:DEC.map(f=>({...f,p:0}))},...x});
+
+const TIMERS={},LIVE={};
+class Component extends DCLogic {
+  state={h:fresh({dark:false})};
+  timers={};
+  componentWillUnmount(){Object.values(TIMERS).forEach(t=>clearInterval(t))}
+  upd(k,p){this.setState(st=>({[k]:{...st[k],...(typeof p==='function'?p(st[k]):p)}}))}
+  stop(k){clearInterval(TIMERS[k]);TIMERS[k]=null}
+  withList(s,list){return {files:{...s.files,[s.mode]:list}}}
+  run(k){
+    const s=this.state[k],list=s.files[s.mode];
+    if(s.running){this.stop(k);this.upd(k,{running:false});return}
+    if(!list.length)return;
+    this.upd(k,s=>({running:true,...(s.files[s.mode].every(f=>f.p>=100)?this.withList(s,s.files[s.mode].map(f=>({...f,p:0}))):{})}));
+    clearInterval(TIMERS[k]);
+    TIMERS[k]=setInterval(()=>{
+      (LIVE.inst||this).setState(st=>{
+        const s=st[k];
+        if(!s.running){clearInterval(TIMERS[k]);return null}
+        const l=s.files[s.mode],i=l.findIndex(f=>f.p<100);
+        if(i<0){clearInterval(TIMERS[k]);return {[k]:{...s,running:false}}}
+        const nl=l.map((f,j)=>j===i?{...f,p:Math.min(100,f.p+Math.max(3,34/Math.sqrt(f.s)))}:f);
+        return {[k]:{...s,files:{...s.files,[s.mode]:nl},sel:i}};
+      });
+    },80);
+  }
+  vals(k){
+    const s=this.state[k],T=k==='h'&&s.dark?TH.hd:TH[k],enc=s.mode==='enc',list=s.files[s.mode];
+    const pr=PRESETS.find(p=>p.id===s.preset);
+    const q=s.expert?s.q:pr.q,eff=s.expert?s.effort:pr.e,ll=s.expert?s.lossless:!!pr.ll;
+    const dist=ll||q>=100?0:0.1+(100-q)*0.09;
+    const est=f=>{let r;
+      if(enc){
+        if(f.e==='jpg'&&s.transcode) r=0.80-(eff-7)*0.012;
+        else if(ll) r=f.e==='jpg'?0.95:f.e==='png'?0.62:0.48;
+        else{const t=Math.pow(Math.max(0,(q-30)/70),2.2);r=(f.e==='jpg'?0.16+t*0.62:0.03+t*0.26)*(1-(eff-7)*0.025);}
+      }else{
+        const d16=s.expert&&s.depth===16?1.9:1;
+        const fm=s.fmt==='auto'?(f.o==='tif'?'tiff':f.o):s.fmt;
+        if(s.fmt==='auto'&&f.o==='jpg') r=1.25;
+        else r=fm==='png'?(f.o==='png'?1.6:2.4)*d16:fm==='jpg'?(f.o==='jpg'?1.25:1.5*Math.pow(s.jq/92,3)):fm==='webp'?1.1:4.2*d16;
+      }
+      if(!s.meta) r*=0.985;
+      return f.s*r;};
+    const extOf=f=>{if(enc)return 'JXL';const x=s.fmt==='auto'?f.o:s.fmt;return x==='jpg'?'JPEG':x==='tif'||x==='tiff'?'TIFF':x.toUpperCase();};
+    const sel=Math.min(s.sel,Math.max(0,list.length-1));
+    let ti=0,to=0,wp=0,wt=0,done=0;
+    const rows=list.map((f,i)=>{
+      const o=est(f);wt+=f.s;wp+=f.p*f.s;
+      const st=f.p>=100?'done':f.p>0?'run':'wait';
+      if(st==='done'){done++;ti+=f.s;to+=o;}
+      const pct=Math.round((o/f.s-1)*100),fin=st==='done';
+      return {file:f.n+'.'+(enc?f.e:'jxl'),ext:enc?f.e.toUpperCase():'JXL',oext:extOf(f),idx:String(i+1).padStart(2,'0'),dims:f.d,fin,
+        inSize:mb(f.s),outSize:fin?mb(o):'—',delta:fin?(pct>0?'+':'−')+Math.abs(pct)+' %':'—',deltaColor:fin&&pct<0?T.good:T.muted,
+        stLabel:st==='done'?'Fertig':st==='run'?Math.floor(f.p)+' %':'Wartet',stColor:T[st],stBg:T[st+'Bg']||'transparent',dBg:fin&&pct<0?(T.goodBg||'transparent'):(fin?(T.waitBg||'transparent'):'transparent'),dFg:fin&&pct<0?(T.goodFg||T.good):T.muted,pPct:Math.floor(f.p)+'%',
+        bg:i===sel?T.selBg:T.rowBg,bd:i===sel?T.acc:T.idleBd,onClick:()=>this.upd(k,{sel:i})};});
+    const cur=list[sel],cr=rows[sel];
+    const lossTxt=cur&&enc&&(ll||(cur.e==='jpg'&&s.transcode))?'verlustfrei':'d '+dist.toFixed(1);
+    const tpct=ti?Math.round((to/ti-1)*100):0;
+    const tog=(on,fn)=>({on,bg:on?T.acc:T.togOffBg,bd:on?T.acc:T.togOffBd,kbg:on?T.accFg:T.togOffK,kl:on?'23px':'3px',cb:on?T.acc:T.cbOff,cbBd:on?T.acc:T.togOffBd,chk:on?'✓':'',onClick:fn});
+    const opt=(on,fn,label,sub)=>({label,sub,onClick:fn,bg:on?T.optOnBg:T.optOffBg,bd:on?T.optOnBd:T.optOffBd,fg:on?T.optOnFg:T.optOffFg,subFg:on?T.optSubOn:T.optSubOff});
+    const allDone=list.length&&done===list.length;
+    const setMode=m=>()=>{this.stop(k);this.upd(k,{mode:m,running:false,sel:0})};
+    return {
+      th:T,tDark:tog(!!s.dark,()=>this.upd(k,s=>({dark:!s.dark}))),themeLabel:s.dark?'Dunkel':'Hell',
+      isEnc:enc,isDec:!enc,expert:s.expert,simple:!s.expert,
+      setEnc:setMode('enc'),setDec:setMode('dec'),
+      encBg:enc?T.tabOnBg:T.tabOffBg,encFg:enc?T.tabOnFg:T.tabOffFg,encSh:enc?T.tabOnSh:'none',
+      decBg:!enc?T.tabOnBg:T.tabOffBg,decFg:!enc?T.tabOnFg:T.tabOffFg,decSh:!enc?T.tabOnSh:'none',
+      modeTitle:enc?'Kodierung · nach JPEG XL':'Dekodierung · aus JPEG XL',sizeLabel:enc?'Ersparnis':'Änderung',
+      rows,hasRows:list.length>0,noRows:list.length===0,count:list.length+(list.length===1?' Datei':' Dateien'),
+      dropHint:enc?'JPEG, PNG, TIFF, GIF, EXR':'.jxl-Dateien',
+      selName:cr?cr.file:'—',selDims:cur?cur.d:'—',
+      leftTag:cr?(enc?`${cr.ext} · ${cr.inSize}`:`JXL · ${cr.inSize}`):'—',
+      rightTag:cr?(enc?`JXL · ${lossTxt}${cr.fin?' · '+cr.outSize:''}`:`${cr.oext}${cr.fin?' · '+cr.outSize:''}`):'—',
+      fmtAuto:opt(s.fmt==='auto',()=>this.upd(k,{fmt:'auto'}),'Automatisch','Ursprüngliches Format wiederherstellen'),
+      tTrash:tog(s.trash,()=>this.upd(k,s=>({trash:!s.trash}))),
+      totSub:done?`${done} von ${list.length} fertig · ${mb(ti)} → ${mb(to)}`:'Ersparnis erscheint nach der ersten fertigen Datei',
+      split:s.split,splitPct:s.split+'%',onSplit:e=>this.upd(k,{split:+e.target.value}),
+      q,effort:eff,jq:s.jq,distText:dist.toFixed(2),effText:`${eff} · ${EFF[eff]}`,
+      onQ:e=>this.upd(k,{q:+e.target.value}),onEff:e=>this.upd(k,{effort:+e.target.value}),onJq:e=>this.upd(k,{jq:+e.target.value}),
+      tExp:tog(s.expert,()=>this.upd(k,s=>s.expert?{expert:false}:{expert:true,q:pr.q,effort:pr.e,lossless:!!pr.ll})),
+      tLoss:tog(s.lossless,()=>this.upd(k,s=>({lossless:!s.lossless}))),
+      tTrans:tog(s.transcode,()=>this.upd(k,s=>({transcode:!s.transcode}))),
+      tMeta:tog(s.meta,()=>this.upd(k,s=>({meta:!s.meta}))),
+      presets:PRESETS.map(p=>opt(s.preset===p.id,()=>this.upd(k,{preset:p.id}),p.label,p.sub)),
+      fmts:FMTS.map(p=>opt(s.fmt===p.id,()=>this.upd(k,{fmt:p.id}),p.label,p.sub)),
+      depths:[8,16].map(d=>opt(s.depth===d,()=>this.upd(k,{depth:d}),d+' Bit','')),
+      showJq:!enc&&s.fmt==='jpg'&&s.expert,showDepth:!enc&&s.expert&&(s.fmt==='png'||s.fmt==='tiff'),showRecon:!enc&&(s.fmt==='jpg'||s.fmt==='auto'),
+      outPath:OUTS[s.out],cycleOut:()=>this.upd(k,s=>({out:(s.out+1)%OUTS.length})),
+      addFolder:()=>this.upd(k,s=>{const src=enc?ENC_X:DEC_X;const n=s.added;
+        const add=src.map((f,i)=>({...f,n:f.n+String(n*3+i+1).padStart(2,'0'),p:0}));
+        return {added:n+1,...this.withList(s,[...s.files[s.mode],...add])};}),
+      clear:()=>{this.stop(k);this.upd(k,s=>({running:false,sel:0,...this.withList(s,[])}))},
+      totIn:mb(ti),totOut:mb(to),totDelta:done?(tpct>0?'+':'−')+Math.abs(tpct)+' %':'–',totColor:tpct<0?T.good:T.muted,
+      progPct:(wt?wp/wt:0)+'%',doneText:`${done}/${list.length} fertig`,
+      run:()=>this.run(k),
+      cta:s.running?'Anhalten':allDone?'Erneut konvertieren':enc?`${list.length} Dateien in JPEG XL konvertieren`:`${list.length} Dateien zurückkonvertieren`,
+      ctaShort:s.running?'❚❚ Anhalten':'▶ Start'
+    };
+  }
+  renderVals(){LIVE.inst=this;return {h:this.vals('h')}}
+}
+</script>
+</body>
+</html>

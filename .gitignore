@@ -1,0 +1,30 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+
+# Dependencies and build output
+node_modules/
+dist/
+dist-ssr/
+src-tauri/target/
+dist-portable/
+*.local
+
+# libjxl sidecars (downloaded by scripts/fetch-libjxl.ps1, never committed)
+src-tauri/binaries/*.exe
+src-tauri/binaries/LICENSE*
+
+# Temporary files
+*.tmp
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+.DS_Store
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
