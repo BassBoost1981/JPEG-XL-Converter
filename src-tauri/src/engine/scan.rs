@@ -83,7 +83,7 @@ impl Scan {
 
 /// The canonical path (resolves `..`, links and letter case), or just the
 /// absolute path when the file does not exist.
-fn identity(path: &Path) -> PathBuf {
+pub(crate) fn identity(path: &Path) -> PathBuf {
     fs::canonicalize(path)
         .or_else(|_| std::path::absolute(path))
         .unwrap_or_else(|_| path.to_path_buf())

@@ -1978,6 +1978,7 @@ checksum = "a0370574b86f7eca156b9f298392b5e69a23f8c86f3f865add60bbc2e79467a6"
 name = "jpeg-xl-konverter"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "image",
  "imagesize",
  "jpeg-encoder",
