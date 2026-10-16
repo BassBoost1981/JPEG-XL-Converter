@@ -3,6 +3,7 @@ pub mod engine;
 mod settings_store;
 
 use std::path::PathBuf;
+use std::time::Duration;
 use std::{env, fs, process};
 
 use tauri::{Manager, RunEvent};
@@ -65,7 +66,9 @@ pub fn run() {
         if let RunEvent::Exit = event
             && let Some(state) = handle.try_state::<AppState>()
         {
-            state.cancel();
+            // Running tools write next to the user's photos; let the workers
+            // kill them and clean up before the process ends.
+            state.cancel_and_wait(Duration::from_secs(3));
             let _ = fs::remove_dir_all(state.work_dir());
         }
     });

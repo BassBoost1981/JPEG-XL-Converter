@@ -11,6 +11,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf, Prefix};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use super::decode::{decode_ext, decode_one};
 use super::disk::free_bytes;
@@ -290,6 +291,28 @@ impl Queue {
         self.inner.wake.notify_all();
     }
 
+    /// Cancels the run and waits up to `timeout` until its workers are gone
+    /// (their tools killed, their scratch files removed). `true` if no run
+    /// is left; `false` on timeout.
+    pub fn cancel_and_wait(&self, timeout: Duration) -> bool {
+        self.cancel();
+        let deadline = Instant::now() + timeout;
+        let mut st = self.inner.lock();
+        while st.run.is_some() {
+            let now = Instant::now();
+            if now >= deadline {
+                return false;
+            }
+            st = self
+                .inner
+                .wake
+                .wait_timeout(st, deadline - now)
+                .unwrap_or_else(|e| e.into_inner())
+                .0;
+        }
+        true
+    }
+
     pub fn is_running(&self) -> bool {
         self.inner.lock().run.is_some()
     }
@@ -479,6 +502,8 @@ impl Inner {
         }
         let run = st.run.take().expect("checked above");
         drop(st);
+        // For `cancel_and_wait`.
+        self.wake.notify_all();
         let mut summary = run.report.summary();
         if run.report.has_problems() {
             summary.log_path = run.report.write_log(&self.log_dir).ok();
@@ -519,6 +544,7 @@ mod tests {
     };
     use std::collections::{HashMap, HashSet};
     use std::fs;
+    use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::{Condvar, Mutex};
     use std::time::{Duration, Instant};
 
@@ -570,6 +596,8 @@ mod tests {
         gate_cv: Condvar,
         /// File names in the order `process` was called.
         started: Mutex<Vec<String>>,
+        /// `process` ignores the cancel token (a tool that does not stop).
+        deaf: AtomicBool,
     }
 
     impl FakeProcessor {
@@ -585,6 +613,7 @@ mod tests {
                 gate: Mutex::new(open),
                 gate_cv: Condvar::new(),
                 started: Mutex::new(Vec::new()),
+                deaf: AtomicBool::new(false),
             })
         }
 
@@ -628,7 +657,7 @@ mod tests {
             progress(5);
             let mut open = self.gate.lock().unwrap();
             while !*open {
-                if cancel.is_cancelled() {
+                if cancel.is_cancelled() && !self.deaf.load(Ordering::SeqCst) {
                     return Outcome {
                         status: ItemStatus::Waiting,
                         out_path: None,
@@ -972,6 +1001,41 @@ mod tests {
         t.fake.open();
         t.queue.start(Mode::Enc, settings());
         assert_eq!(t.sink.wait_finished(2).done, 3);
+    }
+
+    #[test]
+    fn cancel_and_wait_returns_when_workers_are_gone() {
+        let t = setup(FakeProcessor::new(&[], &[], false), 2);
+        // Without a run there is nothing to wait for.
+        assert!(t.queue.cancel_and_wait(Duration::ZERO));
+
+        let ids = add(&t, &["a.png", "b.png", "c.png"]);
+        t.queue.start(Mode::Enc, settings());
+        t.sink
+            .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
+        assert!(t.queue.cancel_and_wait(TIMEOUT));
+        assert!(!t.queue.is_running());
+        assert_eq!(t.sink.status(ids[0]), Some(ItemStatus::Waiting));
+    }
+
+    #[test]
+    fn cancel_and_wait_gives_up_after_timeout() {
+        let t = setup(FakeProcessor::new(&[], &[], false), 1);
+        t.fake.deaf.store(true, Ordering::SeqCst);
+        let ids = add(&t, &["a.png"]);
+        t.queue.start(Mode::Enc, settings());
+        t.sink
+            .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
+
+        let begin = Instant::now();
+        assert!(!t.queue.cancel_and_wait(QUIET));
+        assert!(begin.elapsed() >= QUIET);
+        assert!(t.queue.is_running());
+
+        // Once the file comes back, the wait succeeds.
+        t.fake.open();
+        assert!(t.queue.cancel_and_wait(TIMEOUT));
+        assert!(!t.queue.is_running());
     }
 
     #[test]

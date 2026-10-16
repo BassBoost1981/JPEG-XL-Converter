@@ -2,6 +2,7 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -66,11 +67,19 @@ impl AppState {
         }
     }
 
-    /// Stops a running queue (called on exit).
+    /// Stops a running queue.
     pub fn cancel(&self) {
         if let Some(q) = &self.queue {
             q.cancel();
         }
+    }
+
+    /// Stops a running queue and waits (at most `timeout`) until its tools
+    /// are killed and its scratch files removed (called on exit).
+    pub fn cancel_and_wait(&self, timeout: Duration) -> bool {
+        self.queue
+            .as_ref()
+            .is_none_or(|q| q.cancel_and_wait(timeout))
     }
 
     pub fn work_dir(&self) -> &Path {
