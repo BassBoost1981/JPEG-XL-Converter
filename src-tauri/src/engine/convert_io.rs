@@ -8,7 +8,10 @@
 //! The `exif` field stands for the descriptive metadata the user can switch
 //! off with "keep metadata": EXIF and XMP. The `icc` field is the colour
 //! profile, which defines what the pixel values mean; it is therefore carried
-//! into the PNG whatever the metadata switch says.
+//! into the PNG whatever the metadata switch says. The `frames` field is not
+//! metadata but belongs to the same question, "may the original go?": a
+//! multi-page TIFF or animated WebP is converted from its first page or frame
+//! only, and the rest is `Lost`.
 //!
 //! User-facing errors are short German texts without library detail.
 
@@ -41,12 +44,17 @@ pub struct MetaTransfer {
     /// EXIF and XMP.
     pub exif: MetaState,
     pub icc: MetaState,
+    /// Further pages (multi-page TIFF) or frames (animated WebP) of the source.
+    /// A conversion keeps the first one only, so these are `Lost` or `NotPresent`.
+    pub frames: MetaState,
 }
 
 impl MetaTransfer {
     /// `true` if nothing was lost.
     pub fn complete(&self) -> bool {
-        self.exif != MetaState::Lost && self.icc != MetaState::Lost
+        [self.exif, self.icc, self.frames]
+            .iter()
+            .all(|&state| state != MetaState::Lost)
     }
 }
 
@@ -66,6 +74,15 @@ const WEBP_QUALITY: f32 = 90.0;
 /// Some writers put this APP1 header in front of the TIFF block of an EXIF chunk.
 const EXIF_HEADER: &[u8] = b"Exif\0\0";
 
+/// `Lost` if the source had something that is not in the result, else `NotPresent`.
+fn lost(present: bool) -> MetaState {
+    if present {
+        MetaState::Lost
+    } else {
+        MetaState::NotPresent
+    }
+}
+
 /// Converts a TIFF, WebP or BMP (any format the image crate reads) to a PNG
 /// that cjxl can take. 16-bit stays 16-bit, float becomes 16-bit.
 ///
@@ -81,16 +98,22 @@ const EXIF_HEADER: &[u8] = b"Exif\0\0";
 ///   `tiff_metadata`, which also explains why the image crate is not asked).
 /// - BMP: neither. (Profiles embedded in BMP v5 files are not read; they are rare.)
 ///
+/// Only the first page of a TIFF or the first frame of an animated WebP is
+/// converted; if there are more, `frames` is `Lost`.
+///
 /// A failed conversion leaves no output file behind.
 pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTransfer, String> {
     let reader = open_reader(src)?;
-    let is_tiff = reader.format() == Some(ImageFormat::Tiff);
-    let mut decoder = reader.into_decoder().map_err(|e| image_error(&e))?;
-    let meta = if is_tiff {
+    let format = reader.format();
+    let mut decoder = decoder_for(reader)?;
+    let mut meta = if format == Some(ImageFormat::Tiff) {
         tiff_metadata(src, keep_metadata)?
     } else {
         decoder_metadata(&mut decoder, keep_metadata)?
     };
+    if format == Some(ImageFormat::WebP) {
+        meta.more_frames = webp_has_more_frames(src)?;
+    }
     let image = DynamicImage::from_decoder(decoder).map_err(|e| image_error(&e))?;
 
     let exif_state = if !keep_metadata {
@@ -112,13 +135,18 @@ pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTra
     Ok(MetaTransfer {
         exif: exif_state,
         icc: icc_state,
+        frames: lost(meta.more_frames),
     })
 }
 
-/// Converts djxl's PNG to TIFF (lossless) or WebP (lossy, quality 90). Other
-/// formats are refused. Neither output carries metadata, so whatever the PNG
-/// has is `Lost`: the colour profile always, EXIF and XMP unless the user
-/// switched metadata off.
+/// Converts the PNG djxl wrote to TIFF (lossless) or WebP (lossy, quality 90).
+/// Other formats are refused.
+///
+/// The TIFF takes the ICC profile along (`Transferred`; `Lost` only if the PNG
+/// has an `iCCP` chunk that cannot be read). Neither output carries EXIF or XMP,
+/// so these are `Lost` if the PNG has them and the user did not switch metadata
+/// off; WebP does not carry the ICC profile either. `frames` is always
+/// `NotPresent`: a PNG from djxl has one image.
 ///
 /// A failed conversion leaves no output file behind.
 pub fn from_png(
@@ -127,27 +155,30 @@ pub fn from_png(
     format: OutputFormat,
     keep_metadata: bool,
 ) -> Result<MetaTransfer, String> {
-    let write: fn(DynamicImage, &Path) -> Result<(), String> = match format {
-        OutputFormat::Tiff => write_tiff,
-        OutputFormat::Webp => write_webp,
-        _ => return Err(FORMAT_ERROR.to_string()),
-    };
+    if !matches!(format, OutputFormat::Tiff | OutputFormat::Webp) {
+        return Err(FORMAT_ERROR.to_string());
+    }
     let found = scan_png(src_png)?;
-    let image = open_reader(src_png)?
-        .decode()
-        .map_err(|e| image_error(&e))?;
-    write(image, dst)?;
+    let mut decoder = decoder_for(open_reader(src_png)?)?;
+    let icc = non_empty(decoder.icc_profile().map_err(|e| image_error(&e))?);
+    let image = DynamicImage::from_decoder(decoder).map_err(|e| image_error(&e))?;
 
-    let lost = |present: bool| {
-        if present {
-            MetaState::Lost
+    let icc_state = if format == OutputFormat::Tiff {
+        let carried = icc.is_some();
+        write_tiff(image, icc, dst)?;
+        if carried {
+            MetaState::Transferred
         } else {
-            MetaState::NotPresent
+            lost(found.icc)
         }
+    } else {
+        write_webp(image, dst)?;
+        lost(found.icc)
     };
     Ok(MetaTransfer {
         exif: lost(keep_metadata && (found.exif || found.xmp)),
-        icc: lost(found.icc),
+        icc: icc_state,
+        frames: MetaState::NotPresent,
     })
 }
 
@@ -193,6 +224,17 @@ fn open_reader(path: &Path) -> Result<ImageReader<BufReader<File>>, String> {
     Ok(reader)
 }
 
+/// The decoder for `reader`, refused if the decoded image would be bigger than
+/// `MAX_DECODED_BYTES`. `ImageReader::decode` makes that check on its own,
+/// `into_decoder` followed by `DynamicImage::from_decoder` does not.
+fn decoder_for(reader: ImageReader<BufReader<File>>) -> Result<impl ImageDecoder, String> {
+    let decoder = reader.into_decoder().map_err(|e| image_error(&e))?;
+    if decoder.total_bytes() > MAX_DECODED_BYTES {
+        return Err(TOO_BIG_ERROR.to_string());
+    }
+    Ok(decoder)
+}
+
 fn image_error(error: &ImageError) -> String {
     match error {
         ImageError::Limits(_) => TOO_BIG_ERROR,
@@ -209,6 +251,8 @@ struct SourceMeta {
     exif: Option<Vec<u8>>,
     /// The source has XMP, or EXIF that the PNG cannot take along.
     uncarried: bool,
+    /// The source has more pages or frames than the first.
+    more_frames: bool,
 }
 
 fn non_empty(bytes: Option<Vec<u8>>) -> Option<Vec<u8>> {
@@ -278,6 +322,7 @@ fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String>
     };
     let mut meta = SourceMeta {
         icc: non_empty(icc),
+        more_frames: decoder.more_images(),
         ..SourceMeta::default()
     };
     if keep_metadata {
@@ -293,6 +338,38 @@ fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String>
                 .any(|tag| present(decoder.find_tag(tag)));
     }
     Ok(meta)
+}
+
+/// `true` if a WebP is an animation with more than one frame (`ANMF` chunk).
+fn webp_has_more_frames(path: &Path) -> Result<bool, String> {
+    let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
+    let mut riff = [0u8; 12];
+    input
+        .read_exact(&mut riff)
+        .map_err(|_| READ_ERROR.to_string())?;
+    if &riff[..4] != b"RIFF" || &riff[8..] != b"WEBP" {
+        return Err(READ_ERROR.to_string());
+    }
+    let mut frames = 0;
+    loop {
+        let mut header = [0u8; 8];
+        match input.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+            Err(_) => return Err(READ_ERROR.to_string()),
+        }
+        if &header[..4] == b"ANMF" {
+            frames += 1;
+            if frames > 1 {
+                return Ok(true);
+            }
+        }
+        // Chunk data is padded to an even length.
+        let size = i64::from(u32::from_le_bytes(header[4..].try_into().unwrap()));
+        input
+            .seek_relative(size + (size & 1))
+            .map_err(|_| READ_ERROR.to_string())?;
+    }
 }
 
 // ------------------------------------------------------------------ writing
@@ -348,7 +425,7 @@ fn write_png(
     })
 }
 
-fn write_tiff(image: DynamicImage, dst: &Path) -> Result<(), String> {
+fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<(), String> {
     // The TIFF encoder has no gray + alpha.
     let image = match image.color() {
         ColorType::La8 => image.to_rgba8().into(),
@@ -356,8 +433,14 @@ fn write_tiff(image: DynamicImage, dst: &Path) -> Result<(), String> {
         _ => image,
     };
     write_file(dst, |out| {
+        let mut encoder = TiffEncoder::new(out);
+        if let Some(icc) = icc {
+            encoder
+                .set_icc_profile(icc)
+                .map_err(|_| WRITE_ERROR.to_string())?;
+        }
         image
-            .write_with_encoder(TiffEncoder::new(out))
+            .write_with_encoder(encoder)
             .map_err(|_| WRITE_ERROR.to_string())
     })
 }

@@ -5,7 +5,7 @@
 mod common;
 
 use std::fs::{self, File};
-use std::io::BufWriter;
+use std::io::{BufReader, BufWriter};
 use std::path::Path;
 
 use common::{FIXTURE_H, FIXTURE_W, PngKind};
@@ -178,6 +178,43 @@ fn add_webp_xmp(path: &Path, xmp: &[u8]) {
     fs::write(path, bytes).unwrap();
 }
 
+/// A TIFF with `pages` pages (one directory each).
+fn write_tiff_pages(path: &Path, pages: usize) {
+    let mut encoder = RawTiffEncoder::new(File::create(path).unwrap()).unwrap();
+    for _ in 0..pages {
+        encoder
+            .write_image::<colortype::RGB8>(FIXTURE_W, FIXTURE_H, &rgb8_bytes())
+            .unwrap();
+    }
+}
+
+/// An animated WebP with `frames` frames that differ from each other (libwebp
+/// merges frames that are equal).
+fn write_animated_webp(path: &Path, frames: usize) {
+    let config = webp::WebPConfig::new().unwrap();
+    let mut encoder = webp::AnimEncoder::new(FIXTURE_W, FIXTURE_H, &config);
+    let pictures: Vec<Vec<u8>> = (0..frames)
+        .map(|i| {
+            let shift = 60 * i as u8;
+            rgb8_bytes().iter().map(|v| v.wrapping_add(shift)).collect()
+        })
+        .collect();
+    for (i, rgb) in pictures.iter().enumerate() {
+        let frame = webp::AnimFrame::from_rgb(rgb, FIXTURE_W, FIXTURE_H, 100 * i as i32);
+        encoder.add_frame(frame);
+    }
+    fs::write(path, &*encoder.encode()).unwrap();
+}
+
+/// The ICC profile of the first directory of a TIFF. Read with the tiff crate:
+/// the image crate's decoder misses the profile of a small image.
+fn tiff_icc(path: &Path) -> Option<Vec<u8>> {
+    let mut decoder =
+        tiff::decoder::Decoder::new(BufReader::new(File::open(path).unwrap())).unwrap();
+    let value = decoder.find_tag(Tag::IccProfile).unwrap()?;
+    Some(value.into_u8_vec().unwrap())
+}
+
 /// Decodes by content, so `.tmp` files work.
 fn open(path: &Path) -> DynamicImage {
     ImageReader::open(path)
@@ -209,7 +246,11 @@ fn icc_of(path: &Path) -> Option<Vec<u8>> {
 }
 
 fn meta(exif: MetaState, icc: MetaState) -> MetaTransfer {
-    MetaTransfer { exif, icc }
+    MetaTransfer {
+        exif,
+        icc,
+        frames: NotPresent,
+    }
 }
 
 // ------------------------------------------------------------- MetaTransfer
@@ -219,11 +260,14 @@ fn complete_means_no_field_is_lost() {
     let states = [NotPresent, Transferred, Lost];
     for exif in states {
         for icc in states {
-            assert_eq!(
-                meta(exif, icc).complete(),
-                exif != Lost && icc != Lost,
-                "{exif:?} / {icc:?}"
-            );
+            for frames in states {
+                let transfer = MetaTransfer { exif, icc, frames };
+                assert_eq!(
+                    transfer.complete(),
+                    ![exif, icc, frames].contains(&Lost),
+                    "{transfer:?}"
+                );
+            }
         }
     }
 }
@@ -434,6 +478,73 @@ fn webp_xmp_is_reported_lost_and_its_exif_still_carried() {
 }
 
 #[test]
+fn multi_page_tiff_converts_the_first_page_and_reports_the_rest_lost() {
+    let dir = tempfile::tempdir().unwrap();
+    let tiff = dir.path().join("pages.tif");
+    write_tiff_pages(&tiff, 2);
+
+    for keep_metadata in [true, false] {
+        let png = dir.path().join("pages.png");
+        let transfer = to_png(&tiff, &png, keep_metadata).unwrap();
+
+        assert_eq!(
+            transfer,
+            MetaTransfer {
+                exif: NotPresent,
+                icc: NotPresent,
+                frames: Lost
+            },
+            "keep {keep_metadata}"
+        );
+        assert!(!transfer.complete());
+        assert!(same_pixels(&open(&tiff), &open(&png)), "first page");
+        fs::remove_file(&png).unwrap();
+    }
+}
+
+#[test]
+fn animated_webp_converts_the_first_frame_and_reports_the_rest_lost() {
+    let dir = tempfile::tempdir().unwrap();
+    let webp = dir.path().join("anim.webp");
+    write_animated_webp(&webp, 2);
+    let bytes = fs::read(&webp).unwrap();
+    assert!(
+        bytes.windows(4).filter(|w| w == b"ANMF").count() >= 2,
+        "fixture is not an animation"
+    );
+
+    for keep_metadata in [true, false] {
+        let png = dir.path().join("anim.png");
+        let transfer = to_png(&webp, &png, keep_metadata).unwrap();
+
+        assert_eq!(transfer.frames, Lost, "keep {keep_metadata}");
+        assert!(!transfer.complete());
+        assert!(same_pixels(&open(&webp), &open(&png)), "first frame");
+        fs::remove_file(&png).unwrap();
+    }
+}
+
+#[test]
+fn single_page_and_single_frame_sources_lose_no_frames() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("out.png");
+    let sources = [
+        ("one page", dir.path().join("one.tif")),
+        ("one frame", dir.path().join("one.webp")),
+        ("bmp", dir.path().join("one.bmp")),
+    ];
+    write_tiff_pages(&sources[0].1, 1);
+    write_animated_webp(&sources[1].1, 1);
+    common::write_bmp(&sources[2].1);
+
+    for (name, source) in sources {
+        let transfer = to_png(&source, &png, true).unwrap();
+        assert_eq!(transfer.frames, NotPresent, "{name}");
+        assert!(transfer.complete(), "{name}");
+    }
+}
+
+#[test]
 fn to_png_errors_are_short_german_texts() {
     let dir = tempfile::tempdir().unwrap();
     let png = dir.path().join("out.png");
@@ -567,24 +678,59 @@ fn png_without_exif_or_icc_converts_with_nothing_lost() {
 }
 
 #[test]
-fn png_icc_profile_is_reported_lost() {
+fn png_icc_profile_goes_into_tiff() {
     let dir = tempfile::tempdir().unwrap();
     let png = dir.path().join("a.png");
     write_png_with(&png, &[(b"iCCP", iccp_chunk(&icc_blob()))]);
     assert_eq!(icc_of(&png), Some(icc_blob()), "fixture has no ICC profile");
 
+    // The profile is not metadata the user can switch off.
     for keep_metadata in [true, false] {
-        for (format, name) in [
-            (OutputFormat::Webp, "a.webp"),
-            (OutputFormat::Tiff, "a.tif"),
-        ] {
-            let out = dir.path().join(name);
-            let transfer = from_png(&png, &out, format, keep_metadata).unwrap();
-            // The profile is lost either way: without it the colours change.
-            assert_eq!(transfer.icc, Lost, "{format:?} keep {keep_metadata}");
-            let _ = fs::remove_file(&out);
-        }
+        let tiff = dir.path().join("a.tif");
+        let transfer = from_png(&png, &tiff, OutputFormat::Tiff, keep_metadata).unwrap();
+
+        assert_eq!(
+            transfer,
+            meta(NotPresent, Transferred),
+            "keep {keep_metadata}"
+        );
+        assert!(transfer.complete());
+        assert_eq!(tiff_icc(&tiff), Some(icc_blob()), "keep {keep_metadata}");
+        assert!(same_pixels(&open(&png), &open(&tiff)));
+        fs::remove_file(&tiff).unwrap();
     }
+}
+
+#[test]
+fn png_icc_profile_is_lost_in_webp() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("a.png");
+    write_png_with(&png, &[(b"iCCP", iccp_chunk(&icc_blob()))]);
+
+    for keep_metadata in [true, false] {
+        let webp = dir.path().join("a.webp");
+        let transfer = from_png(&png, &webp, OutputFormat::Webp, keep_metadata).unwrap();
+
+        // Lost either way: without the profile the colours change.
+        assert_eq!(transfer.icc, Lost, "keep {keep_metadata}");
+        assert!(!transfer.complete());
+        assert_eq!(icc_of(&webp), None);
+        fs::remove_file(&webp).unwrap();
+    }
+}
+
+#[test]
+fn icc_chunk_that_cannot_be_read_is_lost_in_tiff() {
+    // There is a profile, but there are no bytes to put into the TIFF.
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("a.png");
+    let tiff = dir.path().join("a.tif");
+    write_png_with(&png, &[(b"iCCP", b"ICC\0\0this is not zlib".to_vec())]);
+
+    let transfer = from_png(&png, &tiff, OutputFormat::Tiff, true).unwrap();
+
+    assert_eq!(transfer.icc, Lost);
+    assert_eq!(tiff_icc(&tiff), None);
 }
 
 #[test]
@@ -777,24 +923,27 @@ fn from_png_errors_are_short_german_texts() {
     );
 }
 
-#[test]
-fn huge_png_is_refused_before_it_is_decoded() {
-    // 40000 x 40000 RGB8 would be 4.8 GB. Only the header is real.
-    let dir = tempfile::tempdir().unwrap();
-    let png = dir.path().join("huge.png");
-    let out = dir.path().join("huge.tif");
+/// A PNG whose header says 40000 x 40000 RGB8 (4.8 GB decoded); the image data is junk.
+fn write_huge_png(path: &Path) {
     let mut encoder =
-        png::Encoder::new(BufWriter::new(File::create(&png).unwrap()), 40_000, 40_000);
+        png::Encoder::new(BufWriter::new(File::create(path).unwrap()), 40_000, 40_000);
     encoder.set_color(png::ColorType::Rgb);
     encoder.set_depth(png::BitDepth::Eight);
     let mut writer = encoder.write_header().unwrap();
     writer.write_chunk(ChunkType(*b"IDAT"), &[0u8; 8]).unwrap();
     writer.write_chunk(ChunkType(*b"IEND"), &[]).unwrap();
-    drop(writer);
+}
 
-    let result = from_png(&png, &out, OutputFormat::Tiff, true);
+#[test]
+fn huge_image_is_refused_before_it_is_decoded() {
+    let dir = tempfile::tempdir().unwrap();
+    let png = dir.path().join("huge.png");
+    let out = dir.path().join("huge.out");
+    write_huge_png(&png);
+    let too_big = Err("Bild ist zu groß zum Umwandeln".to_string());
 
-    assert_eq!(result, Err("Bild ist zu groß zum Umwandeln".to_string()));
+    assert_eq!(to_png(&png, &out, true), too_big);
+    assert_eq!(from_png(&png, &out, OutputFormat::Tiff, true), too_big);
     assert!(!out.exists());
 }
 
