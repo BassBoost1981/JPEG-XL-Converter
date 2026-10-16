@@ -6,7 +6,7 @@
 //! field is only `Transferred` or `NotPresent` when that is certain.
 //!
 //! The `exif` field stands for the descriptive metadata the user can switch
-//! off with "keep metadata": EXIF and XMP. The `icc` field is the colour
+//! off with "keep metadata": EXIF, XMP and IPTC. The `icc` field is the colour
 //! profile, which defines what the pixel values mean; it is therefore carried
 //! into the PNG whatever the metadata switch says. The `frames` field is not
 //! metadata but belongs to the same question, "may the original go?": a
@@ -41,7 +41,7 @@ pub enum MetaState {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct MetaTransfer {
-    /// EXIF and XMP.
+    /// The descriptive metadata: EXIF, XMP and IPTC.
     pub exif: MetaState,
     pub icc: MetaState,
     /// Further pages (multi-page TIFF) or frames (animated WebP) of the source.
@@ -87,16 +87,18 @@ fn lost(present: bool) -> MetaState {
 /// that cjxl can take. 16-bit stays 16-bit, float becomes 16-bit.
 ///
 /// ICC profile: carried when the source has one, whatever `keep_metadata` says.
-/// EXIF and XMP: only looked at when `keep_metadata` is set (otherwise
-/// `NotPresent`). EXIF goes into an `eXIf` chunk; XMP cannot be carried and
-/// counts as `Lost`.
+/// EXIF, XMP and IPTC: only looked at when `keep_metadata` is set (otherwise
+/// `NotPresent`). EXIF goes into an `eXIf` chunk; XMP and IPTC cannot be
+/// carried and count as `Lost`.
 ///
 /// What the decoders can tell (image 0.25.10):
 /// - WebP: EXIF, ICC and XMP, read from the RIFF chunks.
 /// - TIFF: ICC and XMP, but no EXIF, because TIFF keeps EXIF as tags of its
-///   first directory. If it has such tags the EXIF is `Lost` (see
-///   `tiff_metadata`, which also explains why the image crate is not asked).
-/// - BMP: neither. (Profiles embedded in BMP v5 files are not read; they are rare.)
+///   first directory. If it has such tags, or IPTC, the `exif` field is `Lost`
+///   (see `tiff_metadata`, which also explains why the image crate is not asked).
+/// - BMP: nothing. A BMP v5 header that names a colour profile (embedded or
+///   linked) makes `icc` `Lost`, since the profile is not read (see
+///   `bmp_has_profile`).
 ///
 /// Only the first page of a TIFF or the first frame of an animated WebP is
 /// converted; if there are more, `frames` is `Lost`.
@@ -114,6 +116,9 @@ pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTra
     if format == Some(ImageFormat::WebP) {
         meta.more_frames = webp_has_more_frames(src)?;
     }
+    if format == Some(ImageFormat::Bmp) {
+        meta.icc_uncarried = bmp_has_profile(src)?;
+    }
     let image = DynamicImage::from_decoder(decoder).map_err(|e| image_error(&e))?;
 
     let exif_state = if !keep_metadata {
@@ -125,7 +130,9 @@ pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTra
     } else {
         MetaState::NotPresent
     };
-    let icc_state = if meta.icc.is_some() {
+    let icc_state = if meta.icc_uncarried {
+        MetaState::Lost
+    } else if meta.icc.is_some() {
         MetaState::Transferred
     } else {
         MetaState::NotPresent
@@ -249,8 +256,10 @@ struct SourceMeta {
     icc: Option<Vec<u8>>,
     /// The TIFF block for an `eXIf` chunk.
     exif: Option<Vec<u8>>,
-    /// The source has XMP, or EXIF that the PNG cannot take along.
+    /// The source has XMP or IPTC, or EXIF that the PNG cannot take along.
     uncarried: bool,
+    /// The source has a colour profile that is not in `icc`.
+    icc_uncarried: bool,
     /// The source has more pages or frames than the first.
     more_frames: bool,
 }
@@ -294,8 +303,9 @@ fn decoder_metadata(
 /// A TIFF keeps EXIF as tags of its first directory, not as a block we could
 /// copy. They count as EXIF when the directory has a pointer to the EXIF or GPS
 /// directory or one of the descriptive tags a camera or editor writes (an
-/// orientation of 1, "upright", is the default and does not count); then the
-/// EXIF is uncarried. A tag that exists but cannot be read counts as present.
+/// orientation of 1, "upright", is the default and does not count). An XMP
+/// packet or IPTC block counts as well. Then the metadata is uncarried. A tag
+/// that exists but cannot be read counts as present.
 fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String> {
     const EXIF_TAGS: [Tag; 8] = [
         Tag::ExifDirectory,
@@ -308,6 +318,7 @@ fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String>
         Tag::Copyright,
     ];
     const XMP_TAG: Tag = Tag::Unknown(700);
+    const IPTC_TAG: Tag = Tag::Unknown(33723);
     fn present<T>(found: Result<Option<T>, tiff::TiffError>) -> bool {
         !matches!(found, Ok(None))
     }
@@ -333,11 +344,41 @@ fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String>
         };
         meta.uncarried = rotated
             || present(decoder.find_tag(XMP_TAG))
+            || present(decoder.find_tag(IPTC_TAG))
             || EXIF_TAGS
                 .into_iter()
                 .any(|tag| present(decoder.find_tag(tag)));
     }
     Ok(meta)
+}
+
+/// `true` if a BMP names a colour profile, embedded or linked. Only the
+/// `BITMAPV5HEADER` (124 bytes) has the colour space type (`bV5CSType`) that
+/// can say so; the image crate does not read the profile, so it is lost.
+fn bmp_has_profile(path: &Path) -> Result<bool, String> {
+    const FILE_HEADER_LEN: usize = 14;
+    const V5_HEADER_LEN: u32 = 124;
+    const CS_TYPE_AT: usize = FILE_HEADER_LEN + 56;
+    const PROFILE_LINKED: u32 = 0x4C49_4E4B; // 'LINK'
+    const PROFILE_EMBEDDED: u32 = 0x4D42_4544; // 'MBED'
+
+    let mut head = Vec::new();
+    File::open(path)
+        .map_err(|_| OPEN_ERROR.to_string())?
+        .take(CS_TYPE_AT as u64 + 4)
+        .read_to_end(&mut head)
+        .map_err(|_| READ_ERROR.to_string())?;
+    let word = |at: usize| {
+        head.get(at..at + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    if word(FILE_HEADER_LEN) != Some(V5_HEADER_LEN) {
+        return Ok(false);
+    }
+    Ok(matches!(
+        word(CS_TYPE_AT),
+        Some(PROFILE_LINKED | PROFILE_EMBEDDED)
+    ))
 }
 
 /// `true` if a WebP is an animation with more than one frame (`ANMF` chunk).

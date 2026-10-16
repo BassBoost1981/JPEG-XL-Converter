@@ -135,6 +135,7 @@ enum Extra {
     Orientation(u16),
     ExifPointer,
     Xmp,
+    Iptc,
     Icc(Vec<u8>),
 }
 
@@ -152,6 +153,9 @@ fn write_tiff_with(path: &Path, extras: &[Extra]) {
             Extra::ExifPointer => directory.write_tag(Tag::ExifDirectory, 0u32).unwrap(),
             Extra::Xmp => directory
                 .write_tag(Tag::Unknown(700), xmp_packet().as_bytes())
+                .unwrap(),
+            Extra::Iptc => directory
+                .write_tag(Tag::Unknown(33723), &b"IPTC-block"[..])
                 .unwrap(),
             Extra::Icc(profile) => directory
                 .write_tag(Tag::IccProfile, profile.as_slice())
@@ -176,6 +180,49 @@ fn add_webp_xmp(path: &Path, xmp: &[u8]) {
     let riff_size = (bytes.len() - 8) as u32;
     bytes[4..8].copy_from_slice(&riff_size.to_le_bytes());
     fs::write(path, bytes).unwrap();
+}
+
+// Colour space types of a BITMAPV5HEADER (`bV5CSType`).
+const BMP_EMBEDDED: u32 = 0x4D42_4544; // 'MBED'
+const BMP_LINKED: u32 = 0x4C49_4E4B; // 'LINK'
+const BMP_SRGB: u32 = 0x7352_4742; // 'sRGB'
+
+/// A 24-bit BMP with a BITMAPV5HEADER of the given colour space type; `profile`
+/// (may be empty) is stored between the header and the pixels.
+fn write_bmp_v5(path: &Path, cs_type: u32, profile: &[u8]) {
+    const HEADER_LEN: u32 = 124;
+    let rgb = rgb8_bytes();
+    let mut pixels = Vec::new();
+    for row in rgb.chunks(FIXTURE_W as usize * 3).rev() {
+        // bottom-up rows, BGR; 64 * 3 bytes need no padding
+        pixels.extend(row.chunks(3).flat_map(|p| [p[2], p[1], p[0]]));
+    }
+    let pixel_offset = 14 + HEADER_LEN + profile.len() as u32;
+
+    let mut bmp = b"BM".to_vec();
+    bmp.extend((pixel_offset + pixels.len() as u32).to_le_bytes());
+    bmp.extend([0u8; 4]);
+    bmp.extend(pixel_offset.to_le_bytes());
+    // BITMAPV5HEADER
+    bmp.extend(HEADER_LEN.to_le_bytes());
+    bmp.extend((FIXTURE_W as i32).to_le_bytes());
+    bmp.extend((FIXTURE_H as i32).to_le_bytes());
+    bmp.extend(1u16.to_le_bytes()); // planes
+    bmp.extend(24u16.to_le_bytes()); // bits per pixel
+    bmp.extend([0u8; 4]); // BI_RGB
+    bmp.extend((pixels.len() as u32).to_le_bytes());
+    bmp.extend([0u8; 16]); // resolution, palette size
+    bmp.extend([0u8; 16]); // channel masks
+    bmp.extend(cs_type.to_le_bytes());
+    bmp.extend([0u8; 36 + 12]); // end points, gamma
+    bmp.extend(4u32.to_le_bytes()); // intent
+    bmp.extend((HEADER_LEN).to_le_bytes()); // profile data, from the start of the header
+    bmp.extend((profile.len() as u32).to_le_bytes());
+    bmp.extend([0u8; 4]);
+    assert_eq!(bmp.len() as u32, 14 + HEADER_LEN);
+    bmp.extend(profile);
+    bmp.extend(pixels);
+    fs::write(path, bmp).unwrap();
 }
 
 /// A TIFF with `pages` pages (one directory each).
@@ -391,6 +438,46 @@ fn bmp_to_png_without_metadata() {
 }
 
 #[test]
+fn bmp_v5_with_a_colour_profile_reports_icc_lost() {
+    // The image crate does not read the profile, so it cannot go into the PNG.
+    let dir = tempfile::tempdir().unwrap();
+    let profile = icc_blob();
+    for (name, cs_type, profile) in [
+        ("embedded", BMP_EMBEDDED, profile.as_slice()),
+        ("linked", BMP_LINKED, b"profile.icc\0".as_slice()),
+    ] {
+        let bmp = dir.path().join(format!("{name}.bmp"));
+        write_bmp_v5(&bmp, cs_type, profile);
+
+        for keep_metadata in [true, false] {
+            let png = dir.path().join(format!("{name}-{keep_metadata}.png"));
+            let transfer = to_png(&bmp, &png, keep_metadata).unwrap();
+
+            assert_eq!(
+                transfer,
+                meta(NotPresent, Lost),
+                "{name} keep {keep_metadata}"
+            );
+            assert!(!transfer.complete());
+            assert!(same_pixels(&open(&bmp), &open(&png)), "{name}");
+        }
+    }
+}
+
+#[test]
+fn bmp_v5_without_a_colour_profile_loses_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let bmp = dir.path().join("srgb.bmp");
+    let png = dir.path().join("srgb.png");
+    write_bmp_v5(&bmp, BMP_SRGB, &[]);
+
+    let transfer = to_png(&bmp, &png, true).unwrap();
+
+    assert_eq!(transfer, meta(NotPresent, NotPresent));
+    assert!(same_pixels(&open(&bmp), &open(&png)));
+}
+
+#[test]
 fn icc_profile_is_always_carried_into_the_png() {
     // The profile defines what the pixel values mean, so it is not "metadata" that
     // the user can switch off. The TIFF is tiny on purpose: the image crate's own
@@ -427,6 +514,7 @@ fn tiff_exif_that_cannot_be_carried_is_reported_lost() {
         (Extra::Orientation(6), Lost),
         (Extra::ExifPointer, Lost),
         (Extra::Xmp, Lost),
+        (Extra::Iptc, Lost),
         (Extra::Orientation(1), NotPresent), // "upright" is the default, nothing to lose
     ];
     for (extra, expected) in cases {
