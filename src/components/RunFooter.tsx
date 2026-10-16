@@ -6,6 +6,9 @@ import { useApp } from "../state/store";
 const DONE = new Set(["done", "doneWithNote"]);
 const FAILED = new Set(["error", "verifyFailed"]);
 
+/** `D` or `D:` → `D:`; a network share (`\\server\share`) stays as it is. */
+const driveLabel = (drive: string) => (/^[A-Za-z]:?$/.test(drive) ? `${drive[0]}:` : drive);
+
 export function RunFooter() {
   const mode = useApp((s) => s.settings.mode);
   const rows = useApp((s) => s.queues[s.settings.mode]);
@@ -73,7 +76,7 @@ export function RunFooter() {
       </ProgressBar>
       {pauseReason?.type === "diskFull" && (
         <p className="m-0 text-xs text-[var(--danger,#f31260)]">
-          Kein Platz mehr auf Laufwerk {pauseReason.drive.replace(/:$/, "")}:
+          Kein Platz mehr auf Laufwerk {driveLabel(pauseReason.drive)}
         </p>
       )}
       {summary?.logPath && (

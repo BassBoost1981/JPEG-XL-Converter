@@ -113,6 +113,13 @@ describe("RunFooter", () => {
     expect(screen.getByText("Kein Platz mehr auf Laufwerk D:")).toBeInTheDocument();
   });
 
+  it("zeigt bei diskFull eine Netzwerkfreigabe ohne angehängten Doppelpunkt", () => {
+    const share = "\\\\server\\fotos";
+    setup([row(1, "running", { progress: 10 })], { run: "paused", pauseReason: { type: "diskFull", drive: share } });
+    render(<RunFooter />);
+    expect(screen.getByText(`Kein Platz mehr auf Laufwerk ${share}`)).toBeInTheDocument();
+  });
+
   it("zeigt nach dem Lauf die Zusammenfassung und öffnet das Protokoll", async () => {
     const user = userEvent.setup();
     const openLog = vi.spyOn(backend, "openLog").mockResolvedValue(undefined);
