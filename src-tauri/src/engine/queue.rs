@@ -33,7 +33,7 @@ const CLEAR_WHILE_RUNNING: &str =
 
 pub trait Processor: Send + Sync {
     fn target_for(&self, mode: Mode, e: &ScanEntry, s: &JobSettings) -> io::Result<PathBuf>;
-    fn has_space(&self, e: &ScanEntry, target: &Path) -> bool;
+    fn has_space(&self, mode: Mode, e: &ScanEntry, target: &Path) -> bool;
     fn process(
         &self,
         mode: Mode,
@@ -61,16 +61,16 @@ impl Processor for RealProcessor {
         Ok(target_path(e, ext, &s.output))
     }
 
-    /// At least twice the source size free where the target goes (checked on
-    /// the nearest existing folder above it). Unknown free space does not
-    /// block the run.
-    fn has_space(&self, e: &ScanEntry, target: &Path) -> bool {
+    /// At least `space_needed` free where the target goes (checked on the
+    /// nearest existing folder above it). Unknown free space does not block
+    /// the run.
+    fn has_space(&self, mode: Mode, e: &ScanEntry, target: &Path) -> bool {
         target
             .ancestors()
             .skip(1)
             .find(|dir| dir.is_dir())
             .and_then(|dir| free_bytes(dir).ok())
-            .is_none_or(|free| free >= e.size.saturating_mul(2))
+            .is_none_or(|free| free >= space_needed(mode, e))
     }
 
     fn process(
@@ -101,6 +101,17 @@ pub trait ProgressSink: Send + Sync {
     fn item(&self, ev: ItemEvent);
     fn paused(&self, r: PauseReason);
     fn finished(&self, s: RunSummary);
+}
+
+/// Free bytes a file needs before it starts: twice the source size, and for
+/// a decode at least 8 bytes per pixel (a 16-bit RGBA PNG/TIFF can be far
+/// larger than the `.jxl`).
+pub fn space_needed(mode: Mode, e: &ScanEntry) -> u64 {
+    let twice = e.size.saturating_mul(2);
+    match mode {
+        Mode::Enc => twice,
+        Mode::Dec => twice.max((u64::from(e.width) * u64::from(e.height)).saturating_mul(8)),
+    }
 }
 
 /// Half the logical processors, at least one.
@@ -472,7 +483,7 @@ impl Inner {
         }
         let end = if target.exists() {
             JobEnd::Finished(stopped(ItemStatus::Skipped, TARGET_EXISTS))
-        } else if !self.processor.has_space(&job.entry, &target) {
+        } else if !self.processor.has_space(job.mode, &job.entry, &target) {
             JobEnd::NoSpace(drive_of(&target))
         } else {
             let progress = |p: u8| self.emit(job.id, ItemStatus::Running, p, None);
@@ -639,7 +650,7 @@ mod tests {
             Ok(e.path.with_extension("jxl"))
         }
 
-        fn has_space(&self, e: &ScanEntry, _target: &Path) -> bool {
+        fn has_space(&self, _mode: Mode, e: &ScanEntry, _target: &Path) -> bool {
             !self.no_space.contains(&file_name(e))
         }
 
@@ -1191,7 +1202,7 @@ mod tests {
     }
 
     #[test]
-    fn real_processor_space_needs_twice_the_size() {
+    fn real_processor_space_needs_twice_the_size_or_the_pixels() {
         let dir = tempfile::tempdir().unwrap();
         let p = real_processor();
         // The target folder does not exist yet: the nearest existing one counts.
@@ -1204,9 +1215,35 @@ mod tests {
             size: u64::MAX / 2,
             ..entry("a.png")
         };
-        assert!(p.has_space(&small, &target));
-        assert!(!p.has_space(&huge, &target));
+        assert!(p.has_space(Mode::Enc, &small, &target));
+        assert!(!p.has_space(Mode::Enc, &huge, &target));
         // Unknown free space (no existing folder) does not block.
-        assert!(p.has_space(&huge, Path::new(r"Q:\nirgends\a.jxl")));
+        assert!(p.has_space(Mode::Enc, &huge, Path::new(r"Q:\nirgends\a.jxl")));
+
+        // A decode also needs room for the pixels, even from a tiny .jxl.
+        let wide = ScanEntry {
+            size: 1,
+            width: u32::MAX,
+            height: u32::MAX,
+            ..entry("a.jxl")
+        };
+        assert!(p.has_space(Mode::Enc, &wide, &target));
+        assert!(!p.has_space(Mode::Dec, &wide, &target));
+    }
+
+    #[test]
+    fn space_needed_depends_on_mode() {
+        let e = ScanEntry {
+            size: 1000,
+            width: 100,
+            height: 50,
+            ..entry("a.jxl")
+        };
+        assert_eq!(space_needed(Mode::Enc, &e), 2000);
+        // 100 × 50 pixels × 8 bytes outweigh twice the size ...
+        assert_eq!(space_needed(Mode::Dec, &e), 40_000);
+        // ... unless the file itself is bigger.
+        let big = ScanEntry { size: 50_000, ..e };
+        assert_eq!(space_needed(Mode::Dec, &big), 100_000);
     }
 }

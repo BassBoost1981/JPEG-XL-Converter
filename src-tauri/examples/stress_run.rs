@@ -32,8 +32,8 @@ impl Processor for Counting {
     fn target_for(&self, m: Mode, e: &ScanEntry, s: &JobSettings) -> io::Result<PathBuf> {
         self.inner.target_for(m, e, s)
     }
-    fn has_space(&self, e: &ScanEntry, t: &Path) -> bool {
-        self.inner.has_space(e, t)
+    fn has_space(&self, m: Mode, e: &ScanEntry, t: &Path) -> bool {
+        self.inner.has_space(m, e, t)
     }
     fn process(
         &self,
