@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">.jxl — Fold</title>
+  <desc id="desc">Dynamische .jxl-Wortmarke auf nachtblauer Kachel. Zwei blaue und türkisfarbene Bänder bilden ein gefaltetes X. Ein quadratischer Pixel bildet den Punkt.</desc>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#122E59"/>
+      <stop offset="1" stop-color="#060F24"/>
+    </linearGradient>
+    <linearGradient id="ribbon" x1="0" y1="1" x2="1" y2="0">
+      <stop stop-color="#009CF5"/>
+      <stop offset="1" stop-color="#65FFE1"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="112" fill="url(#tile)"/>
+  <rect x="1" y="1" width="510" height="510" rx="111" fill="none" stroke="#FFFFFF" stroke-opacity=".09" stroke-width="2"/>
+  <g transform="translate(44 0) skewX(-9)">
+    <path d="M68 293H105V318L92 331H68Z" fill="#43E8D5"/>
+    <g fill="#F5FAFF">
+      <path d="M151 158H194V196H151Z"/>
+      <path d="M151 215H194V310C194 346 175 365 139 365H123V326H137Q151 326 151 311Z"/>
+      <path d="M385 158H428V281Q428 293 440 293H452V331H431Q385 331 385 285Z"/>
+    </g>
+    <path d="M219 210H270L363 336H312Z" fill="#006FEE"/>
+    <path d="M278 290L307 259L327 287L298 317Z" fill="#00439F"/>
+    <path d="M312 210H363L270 336H219Z" fill="url(#ribbon)"/>
+    <path d="M312 210H363L353 223H302Z" fill="#B1FFF0" fill-opacity=".45"/>
+  </g>
+</svg>
