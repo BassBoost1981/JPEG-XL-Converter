@@ -343,3 +343,89 @@ fn animated_jxl_is_kept() {
     let (outcome, target) = env.decode(&jxl, &settings(OutputFormat::Png, true, false));
     assert_done(&outcome, &target);
 }
+
+/// Marker codes of the segments in front of the image data (SOS).
+fn jpeg_markers(path: &Path) -> Vec<u8> {
+    let bytes = fs::read(path).unwrap();
+    assert_eq!(bytes[..2], [0xFF, 0xD8]);
+    let mut markers = Vec::new();
+    let mut pos = 2;
+    while bytes[pos + 1] != 0xDA {
+        assert_eq!(bytes[pos], 0xFF);
+        markers.push(bytes[pos + 1]);
+        let len = u16::from_be_bytes([bytes[pos + 2], bytes[pos + 3]]) as usize;
+        pos += 2 + len;
+    }
+    markers
+}
+
+#[test]
+fn tiff_output_is_lossless_for_16_bit_and_alpha() {
+    for (kind, color) in [
+        (PngKind::Rgb16, ColorType::Rgb16),
+        (PngKind::Rgba8, ColorType::Rgba8),
+    ] {
+        let env = Env::new();
+        let src = env.path("quelle.png");
+        common::write_png(&src, kind);
+        let jxl = env.cjxl(&src, "bild.jxl", &["-d", "0"]);
+
+        let (outcome, target) = env.decode(&jxl, &settings(OutputFormat::Tiff, true, true));
+        assert_done(&outcome, &target);
+        let expected = image::open(&src).unwrap();
+        let actual = image::open(&target).unwrap();
+        assert_eq!(actual.color(), color, "{kind:?}");
+        assert!(same_pixels(&expected, &actual), "{kind:?}");
+        assert_eq!(env.recycled(), vec![jxl], "{kind:?}");
+    }
+}
+
+#[test]
+fn metadata_off_strips_pixel_jpeg_exif() {
+    const APP1: u8 = 0xE1;
+    let env = Env::new();
+    let src = env.path("quelle.png");
+    common::write_png_with(&src, &[(b"eXIf", common::minimal_exif(MARKER))]);
+    let jxl = env.cjxl(&src, "bild.jxl", &["-d", "0"]);
+
+    // With metadata on, djxl writes the EXIF into the JPEG ...
+    let (outcome, target) = env.decode(&jxl, &settings(OutputFormat::Jpg, true, false));
+    assert_done(&outcome, &target);
+    assert!(jpeg_markers(&target).contains(&APP1));
+    fs::remove_file(&target).unwrap();
+
+    // ... with metadata off there is no APP1 segment left.
+    let (outcome, target) = env.decode(&jxl, &settings(OutputFormat::Jpg, false, false));
+    assert_done(&outcome, &target);
+    assert!(!jpeg_markers(&target).contains(&APP1));
+    assert_eq!(
+        format_and_dims(&target),
+        (ImageFormat::Jpeg, (FIXTURE_W, FIXTURE_H))
+    );
+}
+
+#[test]
+fn corrupt_jbrd_box_gives_no_jpeg() {
+    let env = Env::new();
+    let jpeg = env.path("foto.jpg");
+    common::write_jpeg(&jpeg, 640, 480, JpegOpts::default());
+    let (jxl, _) = env.transcode(&jpeg);
+
+    // Flip the payload of the jbrd box (behind its 8-byte header).
+    let mut bytes = fs::read(&jxl).unwrap();
+    let at = bytes.windows(4).position(|w| w == b"jbrd").unwrap() - 4;
+    let size = u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap()) as usize;
+    for b in &mut bytes[at + 8..at + size] {
+        *b ^= 0x5A;
+    }
+    fs::write(&jxl, bytes).unwrap();
+
+    let (outcome, target) = env.decode(&jxl, &settings(OutputFormat::Auto, true, true));
+    assert_eq!(target, jpeg);
+    assert!(
+        matches!(outcome.status, ItemStatus::Error | ItemStatus::VerifyFailed),
+        "{outcome:?}"
+    );
+    assert!(!target.exists());
+    assert!(env.recycled().is_empty());
+}

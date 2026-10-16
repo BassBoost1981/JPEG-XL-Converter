@@ -14,7 +14,7 @@ use image::{
 };
 use jpeg_xl_konverter_lib::engine::args::{DjxlTarget, cjxl_args, djxl_args};
 use jpeg_xl_konverter_lib::engine::convert_io::{
-    MetaState, MetaTransfer, from_png, strip_png_metadata, to_png,
+    MetaState, MetaTransfer, from_png, strip_jpeg_metadata, strip_png_metadata, to_png,
 };
 use jpeg_xl_konverter_lib::engine::types::{CancelToken, EncodeSettings, InputKind, OutputFormat};
 use jpeg_xl_konverter_lib::engine::verify::same_pixels;
@@ -1538,4 +1538,40 @@ fn animated_jxl_becomes_an_animated_png_and_its_extra_frames_are_reported_lost()
     assert!(!transfer.complete());
     let first = open(&tiff);
     assert_eq!((first.width(), first.height()), (FIXTURE_W, FIXTURE_H));
+}
+
+#[test]
+fn strip_jpeg_metadata_drops_app1_and_app13_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("foto.jpg");
+    common::write_jpeg(
+        &path,
+        FIXTURE_W,
+        FIXTURE_H,
+        common::JpegOpts {
+            exif: Some(common::minimal_exif("TESTMARKER")),
+            ..Default::default()
+        },
+    );
+    // Insert an APP13 (Photoshop/IPTC) segment and fill bytes right after SOI.
+    let mut bytes = fs::read(&path).unwrap();
+    let app13 = [0xFF, 0xFF, 0xED, 0x00, 0x06, b'I', b'P', b'T', b'C'];
+    bytes.splice(2..2, app13);
+    fs::write(&path, &bytes).unwrap();
+    let before = image::open(&path).unwrap();
+
+    strip_jpeg_metadata(&path).unwrap();
+    let stripped = fs::read(&path).unwrap();
+    assert!(!stripped.windows(6).any(|w| w == b"Exif\0\0"));
+    assert!(!stripped.windows(4).any(|w| w == b"IPTC"));
+    assert!(stripped.windows(2).any(|w| w == [0xFF, 0xDB]), "DQT kept");
+    assert_eq!(image::open(&path).unwrap(), before, "image data untouched");
+
+    // Nothing left to strip: the file stays as it is.
+    strip_jpeg_metadata(&path).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), stripped);
+    assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1, "no tmp left");
+
+    fs::write(&path, b"kein jpeg").unwrap();
+    assert!(strip_jpeg_metadata(&path).is_err());
 }

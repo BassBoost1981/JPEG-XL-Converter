@@ -13,13 +13,14 @@ use std::io;
 use std::path::Path;
 
 use super::args::DjxlTarget;
-use super::convert_io::{MetaState, MetaTransfer, from_png, strip_png_metadata};
-use super::encode::Ctx;
+use super::convert_io::{
+    MetaState, MetaTransfer, from_png, strip_jpeg_metadata, strip_png_metadata,
+};
 use super::jxl_container::{has_jpeg_reconstruction, read_header};
 use super::originals::{TrashContext, copy_file_times, handle_original};
 use super::pipeline_util::{
-    NOTE_DATES, NOTE_METADATA, Scratch, Stop, check_cancel, check_target, finished, open_reason,
-    place, prepare, run_djxl,
+    Ctx, NOTE_DATES, NOTE_METADATA, Scratch, Stop, check_cancel, check_target, finished, load,
+    open_reason, pixels_equal, place, prepare, run_djxl,
 };
 use super::types::{Outcome, OutputFormat, ScanEntry};
 use super::verify::{dims_match, image_dims};
@@ -90,12 +91,14 @@ fn run(
         reduce_to_8bit: decode.reduce_to_8bit,
     };
     let mut transfer: Option<MetaTransfer> = None;
+    let mut intermediate = None;
     match output {
         Output::Converted(format) => {
             let png = scratch.add(work.file("zwischen.png"));
             run_djxl(ctx, source, &png, png_target, Stop::error(DECODE_FAILED))?;
             check_cancel(ctx)?;
             transfer = Some(from_png(&png, tmp, format, keep_metadata).map_err(Stop::Error)?);
+            intermediate = Some(png);
         }
         _ => {
             let djxl_target = match output {
@@ -106,8 +109,13 @@ fn run(
                 _ => png_target,
             };
             run_djxl(ctx, source, tmp, djxl_target, Stop::error(DECODE_FAILED))?;
-            if output == Output::Png && !keep_metadata {
-                strip_png_metadata(tmp).map_err(Stop::Error)?;
+            if !keep_metadata {
+                match output {
+                    Output::Png => strip_png_metadata(tmp).map_err(Stop::Error)?,
+                    Output::PixelsJpeg => strip_jpeg_metadata(tmp).map_err(Stop::Error)?,
+                    // A reconstructed JPEG is the original, byte for byte.
+                    _ => {}
+                }
             }
         }
     }
@@ -119,6 +127,10 @@ fn run(
         image_dims(tmp).map_err(|_| Stop::VerifyFailed("Ergebnis lässt sich nicht lesen"))?;
     if !dims_match((entry.width, entry.height), dims) {
         return Err(Stop::VerifyFailed("Abmessungen stimmen nicht"));
+    }
+    // A TIFF counts as lossless only with the pixels djxl gave.
+    if let (Output::Converted(OutputFormat::Tiff), Some(png)) = (output, &intermediate) {
+        check_pixels(png, tmp)?;
     }
     (ctx.progress)(90);
     check_cancel(ctx)?;
@@ -155,6 +167,18 @@ fn run(
     (ctx.progress)(100);
 
     Ok(finished(target, notes))
+}
+
+/// The TIFF has the pixels of the PNG djxl wrote.
+fn check_pixels(png: &Path, tiff: &Path) -> Result<(), Stop> {
+    const FAILED: &str = "Pixelvergleich nicht möglich";
+    let (expected, _) = load(png).map_err(|_| Stop::VerifyFailed(FAILED))?;
+    let (actual, _) = load(tiff).map_err(|_| Stop::VerifyFailed(FAILED))?;
+    if pixels_equal(&expected, &actual) {
+        Ok(())
+    } else {
+        Err(Stop::VerifyFailed("Pixel weichen vom Original ab"))
+    }
 }
 
 /// The source can be opened; `true` if its image header announces an

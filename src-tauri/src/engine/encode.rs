@@ -12,39 +12,25 @@ use std::fs::File;
 use std::io::{self, BufReader, Read};
 use std::path::Path;
 
-use image::metadata::Orientation;
-use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits};
+use image::ImageFormat;
 
 use super::args::{DjxlTarget, cjxl_args};
 use super::convert_io::{MetaState, MetaTransfer, PngMeta, scan_png, to_png};
 use super::jxl_container::has_jpeg_reconstruction;
-use super::originals::{RecycleBin, TrashContext, copy_file_times, handle_original};
+use super::originals::{TrashContext, copy_file_times, handle_original};
+pub use super::pipeline_util::Ctx;
 use super::pipeline_util::{
-    NOTE_DATES, NOTE_METADATA, Scratch, Stop, check_cancel, check_target, finished, open_reason,
-    place, prepare, run_djxl,
+    NOTE_DATES, NOTE_METADATA, Scratch, Stop, check_cancel, check_target, finished, load,
+    open_reason, pixels_equal, place, prepare, run_djxl,
 };
-use super::tools::{ToolError, Tools};
-use super::types::{CancelToken, InputKind, JobSettings, Outcome, ScanEntry};
-use super::verify::{dims_match, files_identical, image_dims, same_pixels};
-
-pub struct Ctx<'a> {
-    pub tools: &'a Tools,
-    pub bin: &'a dyn RecycleBin,
-    pub settings: &'a JobSettings,
-    pub cancel: &'a CancelToken,
-    /// Intermediate PNGs and check outputs go here, under names unique to
-    /// this call.
-    pub work_dir: &'a Path,
-    pub progress: &'a dyn Fn(u8),
-}
+use super::tools::ToolError;
+use super::types::{InputKind, Outcome, ScanEntry};
+use super::verify::{dims_match, files_identical, image_dims};
 
 const NOT_TRANSCODABLE: &str = "JPEG lässt sich nicht verlustfrei umpacken";
 const NOTE_FIRST_PAGE: &str = "Nur die erste Seite übernommen – Original behalten";
 const NOTE_ANIMATION: &str = "Animation – Original behalten";
 const READ_ERROR: &str = "Bild lässt sich nicht lesen";
-
-/// Largest decoded image the pixel check accepts (as in `convert_io`).
-const MAX_DECODED_BYTES: u64 = 4 << 30;
 
 /// Converts `entry` to `target` (which must not exist yet).
 /// Progress: 5 at the start, 60 after converting, 90 after the check, 100 done.
@@ -226,33 +212,6 @@ fn check_dims(input: &Path, decoded: &Path) -> Result<(), Stop> {
         Ok(())
     } else {
         Err(Stop::VerifyFailed("Abmessungen stimmen nicht"))
-    }
-}
-
-/// The first image of a file and its EXIF orientation. Refused (not aborted)
-/// when it would not fit into `MAX_DECODED_BYTES`.
-fn load(path: &Path) -> Result<(DynamicImage, Orientation), ()> {
-    let mut reader = ImageReader::open(path)
-        .and_then(ImageReader::with_guessed_format)
-        .map_err(drop)?;
-    let mut limits = Limits::default();
-    limits.max_alloc = Some(MAX_DECODED_BYTES);
-    reader.limits(limits);
-    let mut decoder = reader.into_decoder().map_err(drop)?;
-    if decoder.total_bytes() > MAX_DECODED_BYTES {
-        return Err(());
-    }
-    let orientation = decoder.orientation().map_err(drop)?;
-    let image = DynamicImage::from_decoder(decoder).map_err(drop)?;
-    Ok((image, orientation))
-}
-
-/// `same_pixels`, without its two 16-bit copies when the layouts already agree.
-fn pixels_equal(a: &DynamicImage, b: &DynamicImage) -> bool {
-    if a.color() == b.color() {
-        a.width() == b.width() && a.height() == b.height() && a.as_bytes() == b.as_bytes()
-    } else {
-        same_pixels(a, b)
     }
 }
 

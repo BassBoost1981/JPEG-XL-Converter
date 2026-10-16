@@ -1,20 +1,37 @@
-//! Steps shared by `encode` and `decode`: how a call stops, the clean-up of
-//! its own files, preparing the `.tmp` and the work file names, running djxl,
-//! and moving the checked result into place.
+//! Steps shared by `encode` and `decode`: the call context, how a call stops,
+//! the clean-up of its own files, preparing the `.tmp` and the work file names,
+//! running djxl, the pixel comparison, and moving the checked result into place.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use image::metadata::Orientation;
+use image::{DynamicImage, ImageDecoder, ImageReader, Limits};
 use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
 use windows::core::HSTRING;
 
 use super::args::{DjxlTarget, djxl_args};
-use super::encode::Ctx;
+use super::originals::RecycleBin;
 use super::targets::tmp_path;
-use super::tools::{ToolError, extended_length};
-use super::types::{ItemStatus, Outcome};
+use super::tools::{ToolError, Tools, extended_length};
+use super::types::{CancelToken, ItemStatus, JobSettings, Outcome};
+use super::verify::same_pixels;
+
+pub struct Ctx<'a> {
+    pub tools: &'a Tools,
+    pub bin: &'a dyn RecycleBin,
+    pub settings: &'a JobSettings,
+    pub cancel: &'a CancelToken,
+    /// Intermediate PNGs and check outputs go here, under names unique to
+    /// this call.
+    pub work_dir: &'a Path,
+    pub progress: &'a dyn Fn(u8),
+}
+
+/// Largest decoded image the pixel check accepts (as in `convert_io`).
+const MAX_DECODED_BYTES: u64 = 4 << 30;
 
 pub(super) const TARGET_EXISTS: &str = "Zieldatei existiert bereits";
 pub(super) const NOTE_METADATA: &str = "Metadaten nicht vollständig übernommen";
@@ -205,4 +222,31 @@ fn move_new(from: &Path, to: &Path) -> windows::core::Result<()> {
     // SAFETY: both arguments are valid, NUL-terminated wide strings that live
     // until the call returns.
     unsafe { MoveFileExW(&from, &to, MOVE_FILE_FLAGS(0)) }
+}
+
+/// The first image of a file and its EXIF orientation. Refused (not aborted)
+/// when it would not fit into `MAX_DECODED_BYTES`.
+pub(super) fn load(path: &Path) -> Result<(DynamicImage, Orientation), ()> {
+    let mut reader = ImageReader::open(path)
+        .and_then(ImageReader::with_guessed_format)
+        .map_err(drop)?;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_DECODED_BYTES);
+    reader.limits(limits);
+    let mut decoder = reader.into_decoder().map_err(drop)?;
+    if decoder.total_bytes() > MAX_DECODED_BYTES {
+        return Err(());
+    }
+    let orientation = decoder.orientation().map_err(drop)?;
+    let image = DynamicImage::from_decoder(decoder).map_err(drop)?;
+    Ok((image, orientation))
+}
+
+/// `same_pixels`, without its two 16-bit copies when the layouts already agree.
+pub(super) fn pixels_equal(a: &DynamicImage, b: &DynamicImage) -> bool {
+    if a.color() == b.color() {
+        a.width() == b.width() && a.height() == b.height() && a.as_bytes() == b.as_bytes()
+    } else {
+        same_pixels(a, b)
+    }
 }

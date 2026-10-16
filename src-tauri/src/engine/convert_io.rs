@@ -223,21 +223,95 @@ pub fn strip_png_metadata(path: &Path) -> Result<(), String> {
         return Ok(());
     }
 
-    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
-    tmp_name.push(".strip.tmp");
-    let tmp = path.with_file_name(tmp_name);
     input.rewind().map_err(|_| EDIT_ERROR.to_string())?;
-    write_file(&tmp, |out| {
+    // `input` moves into the closure and is closed before the rename
+    // (Windows cannot replace a file that is still open).
+    replace_file(path, move |out| {
         copy_without_metadata(&mut input, out).map_err(|e| match e.kind() {
             io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData => READ_ERROR.to_string(),
             _ => EDIT_ERROR.to_string(),
         })
-    })?;
-    drop(input); // Windows cannot replace a file that is still open
+    })
+}
+
+/// Rewrites a JPEG without its APP1 segments (EXIF, XMP) and APP13 segments
+/// (Photoshop/IPTC). Every other segment and the image data after the first
+/// SOS marker are copied byte for byte. A JPEG without such segments is not
+/// touched.
+pub fn strip_jpeg_metadata(path: &Path) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|_| OPEN_ERROR.to_string())?;
+    let kept = jpeg_without_metadata(&bytes).ok_or_else(|| READ_ERROR.to_string())?;
+    if kept.len() == bytes.len() {
+        return Ok(());
+    }
+    replace_file(path, |out| {
+        out.write_all(&kept).map_err(|_| WRITE_ERROR.to_string())
+    })
+}
+
+/// Writes a sibling `.strip.tmp` with `write` and renames it over `path`.
+fn replace_file(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".strip.tmp");
+    let tmp = path.with_file_name(tmp_name);
+    write_file(&tmp, write)?;
     fs::rename(&tmp, path).map_err(|_| {
         let _ = fs::remove_file(&tmp);
         EDIT_ERROR.to_string()
     })
+}
+
+/// The JPEG in `bytes` without APP1 and APP13 segments. `None` if it does
+/// not start with SOI or a segment before SOS is cut off or malformed.
+fn jpeg_without_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
+    const SOI: [u8; 2] = [0xFF, 0xD8];
+    const SOS: u8 = 0xDA;
+    const EOI: u8 = 0xD9;
+    const APP1: u8 = 0xE1;
+    const APP13: u8 = 0xED;
+    if !bytes.starts_with(&SOI) {
+        return None;
+    }
+    let mut out = SOI.to_vec();
+    let mut pos = SOI.len();
+    loop {
+        if *bytes.get(pos)? != 0xFF {
+            return None;
+        }
+        // Fill bytes: any number of 0xFF before the marker code.
+        let mut code_at = pos + 1;
+        while *bytes.get(code_at)? == 0xFF {
+            code_at += 1;
+        }
+        let code = bytes[code_at];
+        match code {
+            SOS | EOI => {
+                out.extend_from_slice(&bytes[pos..]);
+                return Some(out);
+            }
+            // Markers without a length field.
+            0x01 | 0xD0..=0xD7 => {
+                out.extend_from_slice(&bytes[pos..=code_at]);
+                pos = code_at + 1;
+            }
+            _ => {
+                let len_bytes = bytes.get(code_at + 1..code_at + 3)?;
+                let len = usize::from(u16::from_be_bytes([len_bytes[0], len_bytes[1]]));
+                if len < 2 {
+                    return None;
+                }
+                let end = code_at + 1 + len;
+                let segment = bytes.get(pos..end)?;
+                if code != APP1 && code != APP13 {
+                    out.extend_from_slice(segment);
+                }
+                pos = end;
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ reading
