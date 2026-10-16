@@ -1,4 +1,5 @@
 pub mod args;
+pub mod convert_io;
 pub mod formats;
 pub mod jxl_container;
 pub mod scan;
