@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../api";
-import type { InputKind, Mode, OutputFormat, PreviewDto } from "../api/types";
+import type { InputKind, Mode, Msg, OutputFormat, PreviewDto } from "../api/types";
+import { msgText } from "../i18n";
 import { useLang, useT } from "../i18n/useT";
 import { formatDistance, formatSize } from "../lib/format";
 import { toJobSettings } from "../state/settings";
@@ -29,6 +30,12 @@ const FORMAT_LABEL: Record<Exclude<OutputFormat, "auto">, string> = {
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
+/** The reason the backend sent (`preview.unsupported`, ...); anything else that was thrown is the general "unavailable". */
+const failureMsg = (e: unknown): Msg =>
+  typeof e === "object" && e !== null && typeof (e as { key?: unknown }).key === "string"
+    ? (e as Msg)
+    : { key: "preview.unavailable" };
+
 const TAG = "pointer-events-none absolute top-2.5 rounded-full px-2.5 py-1 text-xs";
 
 export function CompareSlider() {
@@ -49,7 +56,7 @@ export function CompareSlider() {
 
   const [split, setSplit] = useState(50);
   const [preview, setPreview] = useState<PreviewDto | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<Msg | null>(null);
   const field = useRef<HTMLDivElement>(null);
   const lastId = useRef<number | null>(null);
   const jobRef = useRef(job);
@@ -59,7 +66,7 @@ export function CompareSlider() {
     if (itemId === null) {
       lastId.current = null;
       setPreview(null);
-      setFailed(false);
+      setFailure(null);
       return;
     }
     const previousId = lastId.current;
@@ -67,7 +74,7 @@ export function CompareSlider() {
     lastId.current = itemId;
     if (selectionChanged) {
       setPreview(null);
-      setFailed(false);
+      setFailure(null);
     }
 
     let stale = false;
@@ -83,12 +90,12 @@ export function CompareSlider() {
         .then((p) => {
           if (stale) return;
           setPreview(p);
-          setFailed(false);
+          setFailure(null);
         })
-        .catch(() => {
+        .catch((e: unknown) => {
           if (stale) return;
           setPreview(null);
-          setFailed(true);
+          setFailure(failureMsg(e));
         });
     };
 
@@ -152,9 +159,9 @@ export function CompareSlider() {
                 />
               </>
             )}
-            {failed && (
+            {failure && (
               <div className="absolute inset-0 flex items-center justify-center text-[var(--muted)]">
-                {t("preview.unavailable")}
+                {msgText(lang, failure)}
               </div>
             )}
             <span className={`${TAG} left-2.5 bg-[var(--overlay)]`}>{leftTag}</span>

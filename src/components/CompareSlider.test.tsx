@@ -200,4 +200,59 @@ describe("CompareSlider", () => {
     await advance(0);
     expect(screen.getByText("Vorschau nicht möglich")).toBeInTheDocument();
   });
+
+  it("zeigt den genauen Grund des Hintergrunds in der Sprache, wenn er eine Msg schickt", async () => {
+    vi.mocked(backend.preview).mockRejectedValue({ key: "preview.unsupported" });
+    setup();
+    const a = render(<CompareSlider />);
+    await advance(0);
+    expect(screen.getByText("Vorschau nicht möglich: Bild nicht unterstützt oder zu groß")).toBeInTheDocument();
+    a.unmount();
+
+    setup([row(1)], { ...DEFAULT_SETTINGS, lang: "en" });
+    const b = render(<CompareSlider />);
+    await advance(0);
+    expect(screen.getByText("Preview unavailable: image not supported or too large")).toBeInTheDocument();
+    b.unmount();
+
+    vi.mocked(backend.preview).mockRejectedValue({ key: "preview.wrongMode" });
+    setup([row(1)], { ...DEFAULT_SETTINGS, lang: "en" });
+    render(<CompareSlider />);
+    await advance(0);
+    expect(screen.getByText("Preview unavailable: file does not match the mode")).toBeInTheDocument();
+  });
+
+  it("der Grund wechselt mit der Sprache, ohne neu zu laden", async () => {
+    vi.mocked(backend.preview).mockRejectedValue({ key: "preview.wrongMode" });
+    setup();
+    render(<CompareSlider />);
+    await advance(0);
+    expect(screen.getByText("Vorschau nicht möglich: Datei passt nicht zum Modus")).toBeInTheDocument();
+    act(() => useApp.setState({ settings: { ...DEFAULT_SETTINGS, lang: "en" } }));
+    expect(screen.getByText("Preview unavailable: file does not match the mode")).toBeInTheDocument();
+    expect(backend.preview).toHaveBeenCalledTimes(1);
+  });
+
+  it("zeigt „Vorschau nicht möglich“, wenn der Fehler keine Msg ist", async () => {
+    setup();
+    for (const rejection of ["Zeichenkette", null, { message: "boom" }, { key: 5 }]) {
+      vi.mocked(backend.preview).mockRejectedValue(rejection);
+      const { unmount } = render(<CompareSlider />);
+      await advance(0);
+      expect(screen.getByText("Vorschau nicht möglich")).toBeInTheDocument();
+      unmount();
+    }
+  });
+
+  it("ein neuer Versuch nach dem Fehler löscht den Grund wieder", async () => {
+    vi.mocked(backend.preview).mockRejectedValueOnce({ key: "preview.unsupported" }).mockResolvedValue(dto);
+    setup([row(1), row(2)]);
+    render(<CompareSlider />);
+    await advance(0);
+    expect(screen.getByText(/Bild nicht unterstützt/)).toBeInTheDocument();
+    act(() => useApp.getState().select(2));
+    await advance(0);
+    expect(screen.queryByText(/Vorschau nicht möglich/)).not.toBeInTheDocument();
+    expect(screen.getByAltText("Nachher")).toHaveAttribute("src", dto.after);
+  });
 });
