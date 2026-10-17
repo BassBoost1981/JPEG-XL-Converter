@@ -119,7 +119,8 @@ fn main() {
     println!("scanned {} files ({} rejected)", scan.entries.len(), scan.rejected);
     let (tx, rx) = channel();
     let sink = Arc::new(Sink { done: tx, finished_items: AtomicUsize::new(0) });
-    let queue = Queue::new(counting.clone(), sink, workers, output.join("_logs"));
+    let logs = output.join("_logs");
+    let queue = Queue::new(counting.clone(), sink, workers, logs.clone(), logs);
     let added = queue.add(Mode::Enc, scan.entries).len();
 
     let settings = JobSettings {

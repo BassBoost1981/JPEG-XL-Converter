@@ -49,6 +49,7 @@ impl AppState {
                 Arc::new(EmitSink(app)),
                 default_workers(),
                 storage.logs_dir.clone(),
+                storage.temp_logs_dir.clone(),
             )
         });
         AppState {
@@ -301,13 +302,20 @@ fn log_path_allowed(logs_dir: &Path, file: &Path) -> bool {
     }
 }
 
-/// Opens a file inside the log folder with the default program.
+/// True if `file` lies in the active log folder or in the temp log folder a
+/// run log falls back to; nothing else may be opened.
+fn log_file_allowed(storage: &Storage, file: &Path) -> bool {
+    log_path_allowed(&storage.logs_dir, file) || log_path_allowed(&storage.temp_logs_dir, file)
+}
+
+/// Opens a run log (in the log folder, or its temp fallback) with the default
+/// program.
 #[tauri::command]
 pub fn open_log(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), Msg> {
     let file = PathBuf::from(&path)
         .canonicalize()
         .map_err(|_| Msg::new(keys::OUTSIDE_LOG_DIR))?;
-    if !log_path_allowed(&state.storage.logs_dir, &file) || !file.is_file() {
+    if !log_file_allowed(&state.storage, &file) || !file.is_file() {
         return Err(Msg::new(keys::OUTSIDE_LOG_DIR));
     }
     app.opener()
@@ -389,6 +397,48 @@ mod tests {
         let settings = s.data_dir.join("settings.json");
         fs::write(&settings, "{}").unwrap();
         assert!(!log_path_allowed(&s.logs_dir, &settings));
+    }
+
+    #[test]
+    fn log_file_allowed_accepts_the_active_and_the_fallback_log_folder() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = resolve(tmp.path(), &tmp.path().join("temp"), 1, &|_| true);
+        assert_ne!(s.logs_dir, s.temp_logs_dir, "portable mode has two folders");
+        fs::create_dir_all(&s.logs_dir).unwrap();
+        fs::create_dir_all(&s.temp_logs_dir).unwrap();
+        let primary = s.logs_dir.join("a.txt");
+        let fallback = s.temp_logs_dir.join("b.txt");
+        fs::write(&primary, "x").unwrap();
+        fs::write(&fallback, "x").unwrap();
+
+        assert!(log_file_allowed(&s, &primary));
+        assert!(log_file_allowed(&s, &fallback));
+    }
+
+    #[test]
+    fn log_file_allowed_still_rejects_everything_else() {
+        let tmp = tempfile::tempdir().unwrap();
+        let s = resolve(tmp.path(), &tmp.path().join("temp"), 1, &|_| true);
+        fs::create_dir_all(&s.logs_dir).unwrap();
+        fs::create_dir_all(&s.temp_logs_dir).unwrap();
+        fs::write(s.data_dir.join("settings.json"), "{}").unwrap();
+
+        // `..` out of either log folder.
+        let up_from_primary = s.logs_dir.join("..").join("settings.json");
+        assert!(up_from_primary.is_file());
+        assert!(!log_file_allowed(&s, &up_from_primary));
+        let work_file = s.work_dir.join("scratch.txt");
+        fs::create_dir_all(&s.work_dir).unwrap();
+        fs::write(&work_file, "x").unwrap();
+        let up_from_fallback = s.temp_logs_dir.join("..").join("1").join("scratch.txt");
+        assert!(up_from_fallback.is_file());
+        assert!(!log_file_allowed(&s, &up_from_fallback));
+
+        // Somewhere else entirely, and files that do not exist.
+        let other = tmp.path().join("other.txt");
+        fs::write(&other, "x").unwrap();
+        assert!(!log_file_allowed(&s, &other));
+        assert!(!log_file_allowed(&s, &s.temp_logs_dir.join("nicht-da.txt")));
     }
 
     #[test]

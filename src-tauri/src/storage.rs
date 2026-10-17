@@ -15,6 +15,10 @@ pub struct Storage {
     pub read_only: bool,
     /// Run logs: `data\logs`, or `%TEMP%\jpeg-xl-konverter\logs` when read-only.
     pub logs_dir: PathBuf,
+    /// `%TEMP%\jpeg-xl-konverter\logs`: where a run log goes when `logs_dir`
+    /// cannot be written mid-session. The same folder as `logs_dir` when
+    /// read-only.
+    pub temp_logs_dir: PathBuf,
     /// Scratch folder of this process: `%TEMP%\jpeg-xl-konverter\<pid>`.
     pub work_dir: PathBuf,
     /// WebView2 profile folder (inside `work_dir`, so it vanishes on exit).
@@ -33,8 +37,9 @@ pub fn resolve(
     let temp_root = temp_dir.join("jpeg-xl-konverter");
     let work_dir = temp_root.join(pid.to_string());
     let read_only = !writable(&data_dir);
+    let temp_logs_dir = temp_root.join("logs");
     let logs_dir = if read_only {
-        temp_root.join("logs")
+        temp_logs_dir.clone()
     } else {
         data_dir.join("logs")
     };
@@ -42,6 +47,7 @@ pub fn resolve(
         data_dir,
         read_only,
         logs_dir,
+        temp_logs_dir,
         webview_dir: work_dir.join("webview"),
         work_dir,
     }
@@ -73,6 +79,11 @@ mod tests {
         let s = resolve(&exe, &temp, 4711, &|_| true);
         assert_eq!(s.data_dir, exe.join("data"));
         assert_eq!(s.logs_dir, exe.join("data").join("logs"));
+        assert_eq!(
+            s.temp_logs_dir,
+            temp.join("jpeg-xl-konverter").join("logs"),
+            "the fallback for logs is always the temp folder"
+        );
         assert!(!s.read_only);
         assert_eq!(s.work_dir, temp.join("jpeg-xl-konverter").join("4711"));
         assert_eq!(s.webview_dir, s.work_dir.join("webview"));
@@ -85,6 +96,7 @@ mod tests {
         assert!(s.read_only);
         assert_eq!(s.data_dir, exe.join("data"));
         assert_eq!(s.logs_dir, temp.join("jpeg-xl-konverter").join("logs"));
+        assert_eq!(s.temp_logs_dir, s.logs_dir);
         assert_eq!(s.work_dir, temp.join("jpeg-xl-konverter").join("4711"));
         assert_eq!(s.webview_dir, s.work_dir.join("webview"));
     }

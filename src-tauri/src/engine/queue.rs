@@ -125,6 +125,8 @@ struct Inner {
     sink: Arc<dyn ProgressSink>,
     workers: usize,
     log_dir: PathBuf,
+    /// Where the log goes if `log_dir` cannot be written.
+    fallback_log_dir: PathBuf,
     state: Mutex<State>,
     /// Signalled whenever waiting workers may find something new.
     wake: Condvar,
@@ -184,6 +186,7 @@ impl Queue {
         sink: Arc<dyn ProgressSink>,
         workers: usize,
         log_dir: PathBuf,
+        fallback_log_dir: PathBuf,
     ) -> Self {
         Queue {
             inner: Arc::new(Inner {
@@ -191,6 +194,7 @@ impl Queue {
                 sink,
                 workers: workers.max(1),
                 log_dir,
+                fallback_log_dir,
                 state: Mutex::new(State::default()),
                 wake: Condvar::new(),
             }),
@@ -513,7 +517,12 @@ impl Inner {
         self.wake.notify_all();
         let mut summary = run.report.summary();
         if run.report.has_problems() {
-            summary.log_path = run.report.write_log(&self.log_dir).ok();
+            // A pulled stick must not cost the log: try the temp folder once.
+            summary.log_path = run
+                .report
+                .write_log(&self.log_dir)
+                .or_else(|_| run.report.write_log(&self.fallback_log_dir))
+                .ok();
         }
         self.sink.finished(summary);
     }
@@ -819,6 +828,7 @@ mod tests {
             sink.clone(),
             workers,
             log_dir.path().join("Protokolle"),
+            log_dir.path().join("Ersatz"),
         );
         Setup {
             queue,
@@ -1174,6 +1184,56 @@ mod tests {
             text.contains("Fehler\tQ:\\bilder\\e.png\tBild lässt sich nicht lesen"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn log_goes_to_the_fallback_folder_when_the_log_folder_is_unusable() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        // The stick was pulled or the folder is blocked: a file sits where
+        // the log folder should be.
+        fs::write(t.log_dir.path().join("Protokolle"), "i am a file").unwrap();
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+        let log = t.sink.wait_finished(1).log_path.expect("log for the error");
+
+        assert_eq!(log.parent().unwrap(), t.log_dir.path().join("Ersatz"));
+        assert!(is_log_name(log.file_name().unwrap().to_str().unwrap()));
+        let text = fs::read_to_string(&log).unwrap();
+        assert!(
+            text.contains("Fehler\tQ:\\bilder\\e.png\tBild lässt sich nicht lesen"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn fallback_folder_stays_untouched_while_the_log_folder_works() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+        let log = t.sink.wait_finished(1).log_path.expect("log for the error");
+
+        assert_eq!(log.parent().unwrap(), t.log_dir.path().join("Protokolle"));
+        assert!(!t.log_dir.path().join("Ersatz").exists());
+    }
+
+    #[test]
+    fn no_log_path_when_both_log_folders_are_unusable() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        fs::write(t.log_dir.path().join("Protokolle"), "file").unwrap();
+        fs::write(t.log_dir.path().join("Ersatz"), "file").unwrap();
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+
+        assert_eq!(t.sink.wait_finished(1).log_path, None);
     }
 
     #[test]
