@@ -37,11 +37,14 @@ function App() {
   useEffect(
     () =>
       backend.onCloseRequested(() => {
-        if (closeAllowed.current) return true;
-        const { run } = useApp.getState();
-        if (run !== "running" && run !== "paused") return true;
-        setConfirmClose(true);
-        return false;
+        const { run, flushSettings } = useApp.getState();
+        if (!closeAllowed.current && (run === "running" || run === "paused")) {
+          setConfirmClose(true);
+          return false;
+        }
+        // The window closes: a settings change still in the 500 ms debounce must not be lost.
+        flushSettings();
+        return true;
       }),
     [],
   );

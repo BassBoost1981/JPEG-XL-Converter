@@ -122,6 +122,64 @@ describe("App", () => {
     expect(closeCb?.()).toBe(true);
   });
 
+  it("Beenden kurz nach einer Einstellungsänderung speichert sie, bevor das Schließen erlaubt wird", async () => {
+    const save = vi.spyOn(backend, "saveSettings").mockResolvedValue();
+    render(<App />);
+    await act(async () => {});
+    save.mockClear();
+    vi.useFakeTimers();
+    try {
+      act(() => useApp.getState().updateSettings({ effort: 5 }));
+      expect(save).not.toHaveBeenCalled();
+
+      expect(closeCb?.()).toBe(true);
+      expect(save).toHaveBeenCalledTimes(1);
+      expect(save).toHaveBeenCalledWith(expect.objectContaining({ effort: 5 }));
+
+      // The debounce timer was dropped with the flush: no second save.
+      vi.advanceTimersByTime(2_000);
+      expect(save).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("Beenden ohne ausstehende Änderung speichert nichts zusätzlich", async () => {
+    const save = vi.spyOn(backend, "saveSettings").mockResolvedValue();
+    render(<App />);
+    await act(async () => {});
+    save.mockClear();
+    expect(closeCb?.()).toBe(true);
+    expect(save).not.toHaveBeenCalled();
+  });
+
+  it("bei der Rückfrage wird erst gespeichert, wenn das Schließen wirklich erlaubt ist", async () => {
+    pin("de");
+    const save = vi.spyOn(backend, "saveSettings").mockResolvedValue();
+    vi.spyOn(backend, "cancelRun").mockResolvedValue();
+    vi.spyOn(backend, "close").mockImplementation(() => {});
+    render(<App />);
+    await act(async () => {});
+    save.mockClear();
+    useApp.setState({ run: "running" });
+    act(() => useApp.getState().updateSettings({ effort: 6 }));
+
+    // The dialog keeps the window open: nothing is flushed yet.
+    let allowed = true;
+    act(() => {
+      allowed = closeCb!();
+    });
+    expect(allowed).toBe(false);
+    expect(save).not.toHaveBeenCalled();
+
+    // "Quit" lets the follow-up close request through, and that one saves.
+    await userEvent.click(await screen.findByRole("button", { name: translate("de", "dialog.quit") }));
+    expect(save).not.toHaveBeenCalled();
+    expect(closeCb!()).toBe(true);
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ effort: 6 }));
+  });
+
   it("Beenden während eines Durchlaufs fragt nach; „Weiterarbeiten“ schließt den Dialog", async () => {
     pin("de");
     render(<App />);

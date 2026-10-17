@@ -45,6 +45,8 @@ export interface AppState {
   retryFailed(): Promise<void>;
   select(id: number | null): void;
   updateSettings(patch: Partial<UiSettings>): void;
+  /** Saves a change still waiting for the debounce right now (the window is closing). Does nothing without one. */
+  flushSettings(): void;
   applyEvent(e: ItemEvent): void;
   /** `run-paused` event from the backend. */
   paused(reason: PauseReason): void;
@@ -190,6 +192,14 @@ export const useApp = create<AppState>()((set, get) => ({
     }, SAVE_DELAY_MS);
   },
 
+  flushSettings() {
+    if (saveTimer === undefined) return;
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    // Fire and forget: the page is going away, so there is nobody left to show an error to.
+    backend.saveSettings(get().settings).catch(() => {});
+  },
+
   applyEvent(e) {
     set((st) => {
       for (const mode of ["enc", "dec"] as const) {
@@ -259,13 +269,8 @@ export const useApp = create<AppState>()((set, get) => ({
       }
     };
     await Promise.all([loadLanguage(), loadStorage(), loadSaved(), loadTools()]);
-    // A pending save is written when the page goes away; losing it would only lose the last change.
-    const flush = () => {
-      if (saveTimer === undefined) return;
-      clearTimeout(saveTimer);
-      saveTimer = undefined;
-      backend.saveSettings(get().settings).catch(() => {});
-    };
+    // A pending save is also written when the page goes away (the close handler in `App` does it earlier).
+    const flush = () => get().flushSettings();
     window.addEventListener("pagehide", flush);
     return () => {
       window.removeEventListener("pagehide", flush);

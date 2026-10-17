@@ -84,6 +84,48 @@ describe("useApp", () => {
     expect(save).toHaveBeenCalledWith(expect.objectContaining({ quality: 59 }));
   });
 
+  it("flushSettings speichert eine ausstehende Änderung sofort und verwirft den Timer", async () => {
+    const save = vi.spyOn(backend, "saveSettings");
+    useApp.getState().updateSettings({ quality: 77 });
+    expect(save).not.toHaveBeenCalled();
+    useApp.getState().flushSettings();
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ quality: 77 }));
+    // The debounce timer is gone: no second save follows.
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushSettings speichert nichts, wenn keine Änderung aussteht", async () => {
+    const save = vi.spyOn(backend, "saveSettings");
+    useApp.getState().flushSettings();
+    expect(save).not.toHaveBeenCalled();
+
+    useApp.getState().updateSettings({ quality: 70 });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(save).toHaveBeenCalledTimes(1);
+    useApp.getState().flushSettings();
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
+  it("flushSettings meldet einen Speicherfehler nicht (das Fenster geht gerade zu)", async () => {
+    vi.spyOn(backend, "saveSettings").mockRejectedValue({ key: "error.saveSettings" });
+    useApp.getState().updateSettings({ effort: 3 });
+    useApp.getState().flushSettings();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(useApp.getState().notice).toBeNull();
+  });
+
+  it("pagehide schreibt eine ausstehende Änderung ebenfalls sofort", async () => {
+    const save = vi.spyOn(backend, "saveSettings");
+    useApp.getState().updateSettings({ quality: 65 });
+    window.dispatchEvent(new Event("pagehide"));
+    expect(save).toHaveBeenCalledTimes(1);
+    expect(save).toHaveBeenCalledWith(expect.objectContaining({ quality: 65 }));
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(save).toHaveBeenCalledTimes(1);
+  });
+
   // Review Focus 3: the data folder vanishes during the session (USB stick pulled).
   it("ein Speicherfehler setzt nur den Hinweis (Msg) und die App läuft weiter", async () => {
     vi.spyOn(backend, "saveSettings").mockRejectedValue({ key: "error.saveSettings" });
