@@ -19,7 +19,7 @@ use crate::engine::queue::{ProgressSink, Queue, RealProcessor, default_workers};
 use crate::engine::scan::scan_paths;
 use crate::engine::tools::Tools;
 use crate::engine::types::{
-    ItemEvent, JobSettings, Mode, PauseReason, QueueItem, RunSummary, ToolStatus,
+    ItemEvent, JobSettings, Lang, Mode, PauseReason, QueueItem, RunSummary, ToolStatus,
 };
 use crate::settings_store;
 
@@ -165,8 +165,13 @@ pub fn clear_queue(state: State<'_, AppState>, mode: Mode) -> Result<(), Msg> {
 }
 
 #[tauri::command]
-pub fn start_run(state: State<'_, AppState>, mode: Mode, settings: JobSettings) -> Result<(), Msg> {
-    state.queue()?.start(mode, settings);
+pub fn start_run(
+    state: State<'_, AppState>,
+    mode: Mode,
+    settings: JobSettings,
+    lang: Lang,
+) -> Result<(), Msg> {
+    state.queue()?.start(mode, settings, lang);
     Ok(())
 }
 
@@ -175,8 +180,9 @@ pub fn retry_failed(
     state: State<'_, AppState>,
     mode: Mode,
     settings: JobSettings,
+    lang: Lang,
 ) -> Result<(), Msg> {
-    state.queue()?.retry_failed(mode, settings);
+    state.queue()?.retry_failed(mode, settings, lang);
     Ok(())
 }
 

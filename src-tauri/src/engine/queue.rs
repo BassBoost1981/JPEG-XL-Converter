@@ -23,7 +23,7 @@ use super::scan::identity;
 use super::targets::target_path;
 use super::tools::Tools;
 use super::types::{
-    CancelToken, ItemEvent, ItemStatus, JobSettings, Mode, Outcome, PauseReason, QueueItem,
+    CancelToken, ItemEvent, ItemStatus, JobSettings, Lang, Mode, Outcome, PauseReason, QueueItem,
     RunSummary, ScanEntry,
 };
 
@@ -257,14 +257,14 @@ impl Queue {
 
     /// Starts a run over the waiting items of `mode`. Does nothing while a
     /// run is active.
-    pub fn start(&self, mode: Mode, s: JobSettings) {
-        Inner::start(&self.inner, mode, s, false);
+    pub fn start(&self, mode: Mode, s: JobSettings, lang: Lang) {
+        Inner::start(&self.inner, mode, s, lang, false);
     }
 
     /// Puts the failed items of `mode` (error, check failed) back to waiting
     /// and starts a run. Does nothing while a run is active.
-    pub fn retry_failed(&self, mode: Mode, s: JobSettings) {
-        Inner::start(&self.inner, mode, s, true);
+    pub fn retry_failed(&self, mode: Mode, s: JobSettings, lang: Lang) {
+        Inner::start(&self.inner, mode, s, lang, true);
     }
 
     /// Running files finish; no new ones start until `resume`.
@@ -340,7 +340,7 @@ impl Inner {
         });
     }
 
-    fn start(this: &Arc<Inner>, mode: Mode, s: JobSettings, retry: bool) {
+    fn start(this: &Arc<Inner>, mode: Mode, s: JobSettings, lang: Lang, retry: bool) {
         let mut st = this.lock();
         if st.run.is_some() {
             return;
@@ -356,7 +356,7 @@ impl Inner {
         }
         st.run = Some(Run {
             mode,
-            report: RunReport::new(mode, &s),
+            report: RunReport::new(mode, &s, lang),
             settings: Arc::new(s),
             // A token cannot be reset, so every run gets its own.
             cancel: CancelToken::new(),
@@ -548,7 +548,7 @@ mod tests {
     use super::*;
     use crate::engine::report::tests::is_log_name;
     use crate::engine::types::{
-        DecodeSettings, EncodeSettings, InputKind, ItemStatus, OutputFormat, OutputLocation,
+        DecodeSettings, EncodeSettings, InputKind, ItemStatus, Lang, OutputFormat, OutputLocation,
     };
     use std::collections::{HashMap, HashSet};
     use std::fs;
@@ -851,7 +851,7 @@ mod tests {
         );
         let t = setup(fake, 2);
         let ids = add(&t, &["a.png", "b.png", "c.png", "d.png", "e.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         let summary = t.sink.wait_finished(1);
 
         assert_eq!(summary.done, 3);
@@ -883,7 +883,7 @@ mod tests {
         let fake = FakeProcessor::new(&[], &[], false);
         let t = setup(fake, 2);
         let ids = add(&t, &["foto.jpg", "foto.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         // The first holds its reservation until the gate opens.
         t.sink.wait("one skipped", |r| {
             ids.iter().any(|id| has_status(r, *id, ItemStatus::Skipped))
@@ -953,7 +953,7 @@ mod tests {
     fn pause_finishes_running_then_stops() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         t.queue.pause();
@@ -973,7 +973,7 @@ mod tests {
     fn resume_continues() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         t.queue.pause();
@@ -992,7 +992,7 @@ mod tests {
     fn cancel_returns_running_to_waiting() {
         let t = setup(FakeProcessor::new(&[], &[], false), 2);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink.wait("two running", |r| {
             has_status(r, ids[0], ItemStatus::Running) && has_status(r, ids[1], ItemStatus::Running)
         });
@@ -1008,7 +1008,7 @@ mod tests {
 
         // A new run gets a fresh token and does all three.
         t.fake.open();
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         assert_eq!(t.sink.wait_finished(2).done, 3);
     }
 
@@ -1019,7 +1019,7 @@ mod tests {
         assert!(t.queue.cancel_and_wait(Duration::ZERO));
 
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         assert!(t.queue.cancel_and_wait(TIMEOUT));
@@ -1032,7 +1032,7 @@ mod tests {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         t.fake.deaf.store(true, Ordering::SeqCst);
         let ids = add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
 
@@ -1051,7 +1051,7 @@ mod tests {
     fn cancel_while_paused_finishes() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png", "b.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         t.queue.pause();
@@ -1068,7 +1068,7 @@ mod tests {
     fn disk_full_pauses_with_reason() {
         let t = setup(FakeProcessor::new(&[], &["b.png"], true), 1);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("paused", |r| r.iter().any(|r| matches!(r, Rec::Paused(_))));
 
@@ -1089,7 +1089,7 @@ mod tests {
     fn add_during_run_is_processed() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let first = add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink.wait("a running", |r| {
             has_status(r, first[0], ItemStatus::Running)
         });
@@ -1114,13 +1114,13 @@ mod tests {
         );
         let t = setup(fake, 1);
         let ids = add(&t, &["a.png", "b.png", "c.png", "d.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         let first = t.sink.wait_finished(1);
         assert_eq!((first.done, first.skipped, first.errors), (1, 1, 2));
 
         t.fake.set_result("c.png", ItemStatus::Done);
         t.fake.set_result("d.png", ItemStatus::Done);
-        t.queue.retry_failed(Mode::Enc, settings());
+        t.queue.retry_failed(Mode::Enc, settings(), Lang::De);
         let second = t.sink.wait_finished(2);
 
         assert_eq!((second.done, second.skipped, second.errors), (2, 0, 0));
@@ -1133,7 +1133,7 @@ mod tests {
     fn clear_rejected_while_running() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
 
@@ -1153,13 +1153,13 @@ mod tests {
         let fake = FakeProcessor::new(&[], &[], true);
         let t = setup(fake, 1);
         add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         assert_eq!(t.sink.wait_finished(1).log_path, None);
         assert!(!t.log_dir.path().join("Protokolle").exists());
 
         t.fake.set_result("e.png", ItemStatus::Error);
         add(&t, &["e.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         let summary = t.sink.wait_finished(2);
         let log = summary.log_path.expect("log for the error");
 
@@ -1174,6 +1174,50 @@ mod tests {
             text.contains("Fehler\tQ:\\bilder\\e.png\tBild lässt sich nicht lesen"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn start_writes_the_log_in_the_given_language() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::En);
+        let log = t.sink.wait_finished(1).log_path.expect("log for the error");
+
+        let text = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            text.lines().next(),
+            Some("JPEG XL Converter – Log"),
+            "{text}"
+        );
+        assert!(text.contains("Error\tQ:\\bilder\\e.png\t"), "{text}");
+        assert!(!text.contains("Fehler"), "{text}");
+    }
+
+    #[test]
+    fn retry_keeps_new_lang() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+        let first = fs::read_to_string(t.sink.wait_finished(1).log_path.unwrap()).unwrap();
+        assert_eq!(first.lines().next(), Some("JPEG XL Konverter – Protokoll"));
+
+        // The file fails again, so the retry writes a log of its own.
+        t.queue.retry_failed(Mode::Enc, settings(), Lang::En);
+        let second = fs::read_to_string(t.sink.wait_finished(2).log_path.unwrap()).unwrap();
+
+        assert_eq!(
+            second.lines().next(),
+            Some("JPEG XL Converter – Log"),
+            "{second}"
+        );
+        assert!(second.contains("Error\tQ:\\bilder\\e.png\t"), "{second}");
+        assert!(!second.contains("Fehler"), "{second}");
     }
 
     fn real_processor() -> RealProcessor {

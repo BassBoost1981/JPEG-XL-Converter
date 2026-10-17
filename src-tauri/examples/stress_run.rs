@@ -17,7 +17,7 @@ use jpeg_xl_konverter_lib::engine::queue::{
 use jpeg_xl_konverter_lib::engine::scan::scan_paths;
 use jpeg_xl_konverter_lib::engine::tools::Tools;
 use jpeg_xl_konverter_lib::engine::types::{
-    CancelToken, DecodeSettings, EncodeSettings, ItemEvent, ItemStatus, JobSettings, Mode,
+    CancelToken, DecodeSettings, EncodeSettings, ItemEvent, ItemStatus, JobSettings, Lang, Mode,
     OutputFormat, OutputLocation, Outcome, PauseReason, RunSummary, ScanEntry,
 };
 
@@ -134,7 +134,7 @@ fn main() {
         output: OutputLocation::Folder { path: output.join("out") },
     };
     let t0 = Instant::now();
-    queue.start(Mode::Enc, settings);
+    queue.start(Mode::Enc, settings, Lang::De);
     let s = rx.recv_timeout(Duration::from_secs(4 * 3600)).expect("run did not finish");
     let secs = t0.elapsed().as_secs_f64();
 

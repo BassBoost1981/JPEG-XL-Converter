@@ -7,7 +7,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use super::i18n;
-use super::msg::Msg;
+use super::msg::{Msg, keys};
 use super::types::{
     ItemStatus, JobSettings, Lang, Mode, Outcome, OutputFormat, OutputLocation, RunSummary,
 };
@@ -18,16 +18,19 @@ const NOTE_SEPARATOR: &str = " · ";
 pub struct RunReport {
     mode: Mode,
     settings: JobSettings,
+    /// Language of the log file.
+    lang: Lang,
     summary: RunSummary,
     /// Files that need attention: status, path, notes.
     problems: Vec<(ItemStatus, PathBuf, Vec<Msg>)>,
 }
 
 impl RunReport {
-    pub fn new(mode: Mode, settings: &JobSettings) -> Self {
+    pub fn new(mode: Mode, settings: &JobSettings, lang: Lang) -> Self {
         RunReport {
             mode,
             settings: settings.clone(),
+            lang,
             summary: RunSummary {
                 done: 0,
                 skipped: 0,
@@ -83,30 +86,56 @@ impl RunReport {
     }
 
     fn log_text(&self) -> String {
+        let lang = self.lang;
         let s = &self.summary;
-        let mut text = String::from("JPEG XL Konverter – Protokoll\r\n");
-        let mode = match self.mode {
-            Mode::Enc => "In JPEG XL umwandeln",
-            Mode::Dec => "Aus JPEG XL zurückwandeln",
-        };
-        let _ = write!(text, "Modus: {mode}\r\n");
-        let _ = write!(text, "Einstellungen: {}\r\n", self.settings_text());
+        let mode = i18n::key(
+            lang,
+            match self.mode {
+                Mode::Enc => keys::LOG_MODE_ENC,
+                Mode::Dec => keys::LOG_MODE_DEC,
+            },
+        );
+        let mut text = i18n::key(lang, keys::LOG_TITLE);
+        text.push_str("\r\n");
         let _ = write!(
             text,
-            "Summe: {} fertig, {} übersprungen, {} Fehler, {} Bytes → {} Bytes\r\n\r\n",
-            s.done, s.skipped, s.errors, s.bytes_in, s.bytes_out
+            "{}\r\n",
+            render(lang, keys::LOG_MODE, &[("mode", mode)])
+        );
+        let _ = write!(
+            text,
+            "{}\r\n",
+            render(
+                lang,
+                keys::LOG_SETTINGS,
+                &[("settings", self.settings_text())]
+            )
+        );
+        let _ = write!(
+            text,
+            "{}\r\n\r\n",
+            render(
+                lang,
+                keys::LOG_TOTALS,
+                &[
+                    ("done", s.done.to_string()),
+                    ("skipped", s.skipped.to_string()),
+                    ("errors", s.errors.to_string()),
+                    ("bytesIn", s.bytes_in.to_string()),
+                    ("bytesOut", s.bytes_out.to_string()),
+                ]
+            )
         );
         for (status, path, notes) in &self.problems {
-            // German until the log follows the app language.
             let reason = notes
                 .iter()
-                .map(|note| i18n::text(Lang::De, note))
+                .map(|note| i18n::text(lang, note))
                 .collect::<Vec<_>>()
                 .join(NOTE_SEPARATOR);
             let _ = write!(
                 text,
                 "{}\t{}\t{reason}\r\n",
-                status_word(*status),
+                status_word(lang, *status),
                 path.display()
             );
         }
@@ -114,58 +143,81 @@ impl RunReport {
     }
 
     fn settings_text(&self) -> String {
+        let lang = self.lang;
         let s = &self.settings;
-        let yes_no = |b: bool| if b { "ja" } else { "nein" };
+        let yes_no = |b: bool| i18n::key(lang, if b { keys::LOG_YES } else { keys::LOG_NO });
         let specific = match self.mode {
-            Mode::Enc => format!(
-                "Distanz {}, Aufwand {}, JPEG verlustfrei umpacken: {}",
-                s.encode.distance,
-                s.encode.effort,
-                yes_no(s.encode.transcode_jpeg)
+            Mode::Enc => render(
+                lang,
+                keys::LOG_SETTINGS_ENC,
+                &[
+                    ("distance", s.encode.distance.to_string()),
+                    ("effort", s.encode.effort.to_string()),
+                    ("transcode", yes_no(s.encode.transcode_jpeg)),
+                ],
             ),
             Mode::Dec => {
                 let format = match s.decode.format {
-                    OutputFormat::Auto => "Automatisch",
-                    OutputFormat::Png => "PNG",
-                    OutputFormat::Jpg => "JPEG",
-                    OutputFormat::Webp => "WebP",
-                    OutputFormat::Tiff => "TIFF",
+                    OutputFormat::Auto => i18n::key(lang, keys::LOG_AUTOMATIC),
+                    OutputFormat::Png => "PNG".to_owned(),
+                    OutputFormat::Jpg => "JPEG".to_owned(),
+                    OutputFormat::Webp => "WebP".to_owned(),
+                    OutputFormat::Tiff => "TIFF".to_owned(),
                 };
-                format!(
-                    "Format {format}, JPEG-Qualität {}, auf 8 Bit reduzieren: {}",
-                    s.decode.jpeg_quality,
-                    yes_no(s.decode.reduce_to_8bit)
+                render(
+                    lang,
+                    keys::LOG_SETTINGS_DEC,
+                    &[
+                        ("format", format),
+                        ("quality", s.decode.jpeg_quality.to_string()),
+                        ("reduce", yes_no(s.decode.reduce_to_8bit)),
+                    ],
                 )
             }
         };
-        let output = match &s.output {
-            OutputLocation::Next => "neben dem Original".to_string(),
+        let target = match &s.output {
+            OutputLocation::Next => i18n::key(lang, keys::LOG_NEXT_TO_ORIGINAL),
             OutputLocation::Folder { path } => path.display().to_string(),
         };
-        format!(
-            "{specific}, Metadaten behalten: {}, Originale in den Papierkorb: {}, Ziel: {output}",
-            yes_no(s.keep_metadata),
-            yes_no(s.trash_originals)
+        render(
+            lang,
+            keys::LOG_SETTINGS_COMMON,
+            &[
+                ("specific", specific),
+                ("metadata", yes_no(s.keep_metadata)),
+                ("trash", yes_no(s.trash_originals)),
+                ("target", target),
+            ],
         )
     }
 }
 
-fn status_word(status: ItemStatus) -> &'static str {
-    match status {
-        ItemStatus::Skipped => "Übersprungen",
-        ItemStatus::Error => "Fehler",
-        ItemStatus::VerifyFailed => "Prüfung fehlgeschlagen",
-        ItemStatus::DoneWithNote => "Fertig mit Hinweis",
-        ItemStatus::Done => "Fertig",
-        ItemStatus::Waiting => "Wartet",
-        ItemStatus::Running => "Läuft",
-    }
+/// The catalog text for `key` with `params` filled in (values are not substituted again).
+fn render(lang: Lang, key: &str, params: &[(&str, String)]) -> String {
+    let msg = params.iter().fold(Msg::new(key), |msg, (name, value)| {
+        msg.with(name, value.as_str())
+    });
+    i18n::text(lang, &msg)
+}
+
+fn status_word(lang: Lang, status: ItemStatus) -> String {
+    i18n::key(
+        lang,
+        match status {
+            ItemStatus::Skipped => keys::LOG_STATUS_SKIPPED,
+            ItemStatus::Error => keys::LOG_STATUS_ERROR,
+            ItemStatus::VerifyFailed => keys::LOG_STATUS_VERIFY_FAILED,
+            ItemStatus::DoneWithNote => keys::LOG_STATUS_DONE_WITH_NOTE,
+            ItemStatus::Done => keys::LOG_STATUS_DONE,
+            ItemStatus::Waiting => keys::LOG_STATUS_WAITING,
+            ItemStatus::Running => keys::LOG_STATUS_RUNNING,
+        },
+    )
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::engine::msg::keys;
     use crate::engine::types::{DecodeSettings, EncodeSettings};
 
     fn settings() -> JobSettings {
@@ -198,7 +250,7 @@ pub(crate) mod tests {
 
     #[test]
     fn summary_counts_done_skipped_and_errors() {
-        let mut report = RunReport::new(Mode::Enc, &settings());
+        let mut report = RunReport::new(Mode::Enc, &settings(), Lang::De);
         report.add(
             Path::new("a.jpg"),
             100,
@@ -248,7 +300,7 @@ pub(crate) mod tests {
 
     #[test]
     fn only_done_files_are_no_problem() {
-        let mut report = RunReport::new(Mode::Enc, &settings());
+        let mut report = RunReport::new(Mode::Enc, &settings(), Lang::De);
         report.add(
             Path::new("a.jpg"),
             100,
@@ -267,10 +319,9 @@ pub(crate) mod tests {
         assert!(report.has_problems());
     }
 
-    #[test]
-    fn log_has_name_summary_and_problem_lines() {
-        let dir = tempfile::tempdir().unwrap();
-        let mut report = RunReport::new(Mode::Dec, &settings());
+    /// A decode run of five files: one done, one each that needs attention.
+    fn log_report(lang: Lang) -> RunReport {
+        let mut report = RunReport::new(Mode::Dec, &settings(), lang);
         report.add(
             Path::new("a.jxl"),
             100,
@@ -300,11 +351,137 @@ pub(crate) mod tests {
                 &[keys::ANIMATION_KEPT_JXL],
             ),
         );
+        report
+    }
+
+    #[test]
+    fn log_in_english() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = log_report(Lang::En)
+            .write_log(&dir.path().join("Logs"))
+            .unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        let reason = |key: &str| i18n::text(Lang::En, &Msg::new(key));
+
+        assert_eq!(
+            text.lines().next(),
+            Some("JPEG XL Converter – Log"),
+            "{text}"
+        );
+        assert!(
+            text.contains("Mode: Convert back from JPEG XL\r\n"),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Settings: Format Automatic, JPEG quality 92, reduce to 8 bit: no, \
+                 keep metadata: yes, originals to Recycle Bin: no, target: next to the original\r\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains("Total: done 2, skipped 1, errors 2, 200 bytes → 410 bytes\r\n"),
+            "{text}"
+        );
+        for (word, file, key) in [
+            ("Error", "b.jxl", keys::JXL_UNREADABLE),
+            ("Skipped", "c.jxl", keys::TARGET_EXISTS),
+            ("Check failed", "d.jxl", keys::PIXELS_DIFFER),
+            ("Done with note", "e.jxl", keys::ANIMATION_KEPT_JXL),
+        ] {
+            let line = format!("{word}\tD:\\Bilder\\{file}\t{}", reason(key));
+            assert!(text.lines().any(|l| l == line), "{line}\n{text}");
+        }
+        assert!(!text.contains("a.jxl"), "{text}");
+        for line in text.lines() {
+            assert!(
+                !line.chars().any(|c| "äöüÄÖÜß".contains(c)),
+                "umlaut in {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn log_in_english_joins_notes_and_translates_nested_reasons() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut report = RunReport::new(Mode::Enc, &settings(), Lang::En);
+        report.add(
+            Path::new(r"D:\Bilder\a.png"),
+            100,
+            &outcome(
+                ItemStatus::DoneWithNote,
+                Some(10),
+                &[keys::METADATA_INCOMPLETE, keys::DATES_NOT_KEPT],
+            ),
+        );
+        let mut kept = outcome(ItemStatus::DoneWithNote, Some(10), &[]);
+        kept.notes
+            .push(Msg::new(keys::KEPT_RECYCLE_FAILED).with_msg(
+                "reason",
+                Msg::new(keys::WINDOWS_ERROR).with("code", "0x80270058"),
+            ));
+        report.add(Path::new(r"D:\Bilder\b.png"), 100, &kept);
+        let text = fs::read_to_string(report.write_log(dir.path()).unwrap()).unwrap();
+
+        let joined = [keys::METADATA_INCOMPLETE, keys::DATES_NOT_KEPT]
+            .map(|key| i18n::text(Lang::En, &Msg::new(key)))
+            .join(" · ");
+        assert!(
+            text.contains(&format!("Done with note\tD:\\Bilder\\a.png\t{joined}\r\n")),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Done with note\tD:\\Bilder\\b.png\tOriginal kept: Recycle Bin not possible (Windows error 0x80270058)\r\n"
+            ),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn log_settings_line_in_both_languages() {
+        let mut s = settings();
+        s.trash_originals = true;
+        s.output = OutputLocation::Folder {
+            path: PathBuf::from(r"D:\Ziel"),
+        };
+        // Title, mode, settings.
+        let settings_line = |mode: Mode, lang: Lang| {
+            let text = RunReport::new(mode, &s, lang).log_text();
+            text.lines().nth(2).unwrap().to_owned()
+        };
+
+        assert_eq!(
+            settings_line(Mode::Enc, Lang::De),
+            "Einstellungen: Distanz 1.2, Aufwand 7, JPEG verlustfrei umpacken: ja, \
+             Metadaten behalten: ja, Originale in den Papierkorb: ja, Ziel: D:\\Ziel"
+        );
+        assert_eq!(
+            settings_line(Mode::Enc, Lang::En),
+            "Settings: Distance 1.2, effort 7, transcode JPEG losslessly: yes, \
+             keep metadata: yes, originals to Recycle Bin: yes, target: D:\\Ziel"
+        );
+        assert_eq!(
+            settings_line(Mode::Dec, Lang::De),
+            "Einstellungen: Format Automatisch, JPEG-Qualität 92, auf 8 Bit reduzieren: nein, \
+             Metadaten behalten: ja, Originale in den Papierkorb: ja, Ziel: D:\\Ziel"
+        );
+    }
+
+    #[test]
+    fn log_in_german_unchanged() {
+        let dir = tempfile::tempdir().unwrap();
+        let report = log_report(Lang::De);
         let path = report.write_log(&dir.path().join("Protokolle")).unwrap();
 
         assert_eq!(path.parent().unwrap(), dir.path().join("Protokolle"));
         assert!(is_log_name(path.file_name().unwrap().to_str().unwrap()));
         let text = fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text.lines().next(),
+            Some("JPEG XL Konverter – Protokoll"),
+            "{text}"
+        );
         assert!(text.contains("Modus: Aus JPEG XL zurückwandeln"), "{text}");
         assert!(
             text.contains("Summe: 2 fertig, 1 übersprungen, 2 Fehler"),
@@ -324,7 +501,7 @@ pub(crate) mod tests {
     #[test]
     fn log_joins_notes_and_translates_nested_reasons() {
         let dir = tempfile::tempdir().unwrap();
-        let mut report = RunReport::new(Mode::Enc, &settings());
+        let mut report = RunReport::new(Mode::Enc, &settings(), Lang::De);
         report.add(
             Path::new(r"D:\Bilder\a.png"),
             100,
