@@ -137,15 +137,15 @@ describe("useApp", () => {
     const add = vi.spyOn(backend, "addPaths");
     add.mockResolvedValue({ items: [], rejected: 1 });
     await useApp.getState().addPaths(["x.txt"]);
-    expect(useApp.getState().notice).toEqual({ key: "notice.rejected.one", params: { n: "1" } });
+    expect(useApp.getState().notice).toEqual({ key: "notice.rejected.one", params: { n: 1 } });
 
     add.mockResolvedValue({ items: [], rejected: 3 });
     await useApp.getState().addPaths(["y.txt"]);
-    expect(useApp.getState().notice).toEqual({ key: "notice.rejected.other", params: { n: "3" } });
+    expect(useApp.getState().notice).toEqual({ key: "notice.rejected.other", params: { n: 3 } });
 
     add.mockResolvedValue({ items: [], rejected: 0 });
     await useApp.getState().addPaths(["z.jpg"]);
-    expect(useApp.getState().notice).toEqual({ key: "notice.rejected.other", params: { n: "3" } });
+    expect(useApp.getState().notice).toEqual({ key: "notice.rejected.other", params: { n: 3 } });
   });
 
   describe("Sprache", () => {

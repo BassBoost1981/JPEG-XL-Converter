@@ -1,16 +1,11 @@
 import type { Lang, Mode, RunSummary } from "../api/types";
-import { translate } from "../i18n";
+import { formatNumber, translate } from "../i18n";
 
 export type RunState = "idle" | "running" | "paused" | "finished";
 
 const KB = 1024;
 const MB = KB * 1024;
 const GB = MB * 1024;
-
-const countFormat: Record<Lang, Intl.NumberFormat> = {
-  de: new Intl.NumberFormat("de-DE"),
-  en: new Intl.NumberFormat("en-US"),
-};
 
 /** `.one` for exactly 1, otherwise `.other` (German and English share this rule). */
 const plural = (n: number): "one" | "other" => (n === 1 ? "one" : "other");
@@ -39,7 +34,7 @@ export function formatDelta(inB: number, outB: number): string {
 
 /** Thousands separator: dot in German, comma in English. */
 export function formatCount(n: number, lang: Lang): string {
-  return countFormat[lang].format(n);
+  return formatNumber(lang, n);
 }
 
 /** Decimal point in both languages (as in the design): 0.5, 1.2, 1.18. */

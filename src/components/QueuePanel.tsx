@@ -2,14 +2,11 @@ import { Button } from "@heroui/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 import { backend } from "../api";
-import { msgText, translate } from "../i18n";
-import { useLang } from "../i18n/useT";
-import { formatCount } from "../lib/format";
+import { msgText } from "../i18n";
+import { useLang, useT } from "../i18n/useT";
 import { useApp } from "../state/store";
 import { GRID_COLUMNS, QueueRow, ROW_HEIGHT } from "./QueueRow";
 
-const ENC_HINT = "JPEG, PNG, GIF, TIFF, WebP, BMP";
-const DEC_HINT = ".jxl-Dateien";
 const BTN = "h-[30px] min-h-0 rounded-[10px] text-[13px] font-normal";
 
 export function QueuePanel() {
@@ -19,6 +16,7 @@ export function QueuePanel() {
   const running = useApp((s) => s.run === "running" || s.run === "paused");
   const notice = useApp((s) => s.notice);
   const select = useApp((s) => s.select);
+  const t = useT();
   const lang = useLang();
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -36,21 +34,21 @@ export function QueuePanel() {
   const pickFiles = async () =>
     add(
       await backend.pickFiles(mode, {
-        title: translate(lang, "dialog.pickFiles"),
-        filterImages: translate(lang, "dialog.filterImages"),
+        title: t("dialog.pickFiles"),
+        filterImages: t("dialog.filterImages"),
       }),
     );
   const pickFolder = async () => {
-    const folder = await backend.pickFolder(translate(lang, "dialog.pickFolder"));
+    const folder = await backend.pickFolder(t("dialog.pickFolder"));
     if (folder) await add([folder]);
   };
 
   return (
     <>
       <div className="flex flex-none items-center gap-2 px-4 pb-2.5 pt-3.5">
-        <span className="text-[15px] font-semibold">Warteschlange</span>
+        <span className="text-[15px] font-semibold">{t("queue.title")}</span>
         <span className="rounded-full bg-[var(--d100)] px-2 py-0.5 text-xs text-[var(--muted)]">
-          {rows.length === 1 ? "1 Datei" : `${formatCount(rows.length, lang)} Dateien`}
+          {t(rows.length === 1 ? "queue.count.one" : "queue.count.other", { n: rows.length })}
         </span>
         <div className="flex-1" />
         <Button
@@ -58,14 +56,14 @@ export function QueuePanel() {
           className={`${BTN} border-2 border-[var(--d200)] bg-transparent px-3 text-[var(--fg)]`}
           onPress={() => void pickFiles()}
         >
-          Dateien
+          {t("queue.files")}
         </Button>
         <Button
           variant="secondary"
           className={`${BTN} bg-[var(--info-bg)] px-3.5 text-[var(--info-fg)]`}
           onPress={() => void pickFolder()}
         >
-          Ordner hinzufügen
+          {t("queue.addFolder")}
         </Button>
         <Button
           variant="ghost"
@@ -73,7 +71,7 @@ export function QueuePanel() {
           className={`${BTN} bg-transparent px-2.5 text-[#f31260]`}
           onPress={() => void useApp.getState().clear()}
         >
-          Leeren
+          {t("queue.clear")}
         </Button>
       </div>
 
@@ -88,17 +86,17 @@ export function QueuePanel() {
         style={{ gridTemplateColumns: GRID_COLUMNS }}
       >
         <span />
-        <span>Datei</span>
-        <span>Original</span>
-        <span>Ergebnis</span>
-        <span>{mode === "enc" ? "Ersparnis" : "Änderung"}</span>
-        <span>Status</span>
+        <span>{t("col.file")}</span>
+        <span>{t("col.original")}</span>
+        <span>{t("col.result")}</span>
+        <span>{mode === "enc" ? t("col.savings") : t("col.change")}</span>
+        <span>{t("col.status")}</span>
       </div>
 
       {rows.length === 0 ? (
         <div className="mx-3 mb-3 mt-2.5 flex h-[140px] flex-none flex-col items-center justify-center gap-1 rounded-[14px] border-2 border-dashed border-[var(--d200)] text-[var(--muted)]">
-          <span className="font-semibold text-[var(--fg)]">Bilder oder Ordner hierher ziehen</span>
-          <span className="text-xs">{mode === "enc" ? ENC_HINT : DEC_HINT}</span>
+          <span className="font-semibold text-[var(--fg)]">{t("queue.dropTitle")}</span>
+          <span className="text-xs">{mode === "enc" ? t("queue.dropHintEnc") : t("queue.dropHintDec")}</span>
         </div>
       ) : (
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto pb-3 pt-1">

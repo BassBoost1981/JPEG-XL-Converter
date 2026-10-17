@@ -3,7 +3,7 @@ import { memo, useEffect, useState, type CSSProperties } from "react";
 import { backend } from "../api";
 import type { ItemStatus } from "../api/types";
 import { msgText } from "../i18n";
-import { useLang } from "../i18n/useT";
+import { useLang, useT } from "../i18n/useT";
 import { formatDelta, formatSize } from "../lib/format";
 import type { Row } from "../state/store";
 
@@ -88,7 +88,6 @@ function useThumb(id: number): string | null {
 }
 
 interface Look {
-  label: string;
   color: string;
   bg: string;
 }
@@ -98,22 +97,20 @@ const BLUE = { color: "var(--run)", bg: "var(--run-bg)" };
 const GREEN = { color: "var(--good)", bg: "var(--good-bg)" };
 const RED = { color: "#f31260", bg: "color-mix(in srgb, #f31260 15%, transparent)" };
 
-function look(status: ItemStatus, progress: number): Look {
+function look(status: ItemStatus): Look {
   switch (status) {
     case "waiting":
-      return { label: "Wartet", ...GREY };
+      return GREY;
     case "running":
-      return { label: `${progress} %`, ...BLUE };
+      return BLUE;
     case "done":
-      return { label: "Fertig", ...GREEN };
     case "doneWithNote":
-      return { label: "Fertig mit Hinweis", ...GREEN };
+      return GREEN;
     case "skipped":
-      return { label: "Übersprungen", ...GREY };
+      return GREY;
     case "error":
-      return { label: "Fehler", ...RED };
     case "verifyFailed":
-      return { label: "Prüfung fehlgeschlagen", ...RED };
+      return RED;
   }
 }
 
@@ -127,14 +124,15 @@ function InfoIcon() {
 }
 
 function StatusChip({ row }: { row: Row }) {
+  const t = useT();
   const lang = useLang();
-  const l = look(row.status, row.progress);
+  const l = look(row.status);
   const chip = (
     <span
       className="inline-flex items-center gap-1 self-start rounded-full px-2 py-px text-xs"
       style={{ background: l.bg, color: l.color }}
     >
-      {l.label}
+      {t(`status.${row.status}`, { n: row.progress })}
       {row.status === "doneWithNote" && <InfoIcon />}
     </span>
   );
@@ -142,11 +140,7 @@ function StatusChip({ row }: { row: Row }) {
   return (
     <Tooltip>
       <Tooltip.Trigger>{chip}</Tooltip.Trigger>
-      <Tooltip.Content>
-        {row.notes.map((note, i) => (
-          <div key={i}>{msgText(lang, note)}</div>
-        ))}
-      </Tooltip.Content>
+      <Tooltip.Content>{row.notes.map((note) => msgText(lang, note)).join(" · ")}</Tooltip.Content>
     </Tooltip>
   );
 }
@@ -174,7 +168,7 @@ export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect 
   const name = baseName(entry.path);
   const isDone = row.status === "done" || row.status === "doneWithNote";
   const out = isDone && row.outSize !== undefined ? row.outSize : null;
-  const l = look(row.status, row.progress);
+  const l = look(row.status);
   const barWidth = row.status === "waiting" ? 0 : row.status === "running" ? row.progress : 100;
   const smaller = out !== null && out < entry.size;
   const deltaLook = smaller ? { color: "var(--good-fg)", bg: "var(--good-bg)" } : GREY;

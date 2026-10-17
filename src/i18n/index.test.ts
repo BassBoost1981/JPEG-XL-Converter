@@ -99,6 +99,22 @@ describe("translate", () => {
     expect(translate("de", "queue.count.one", { n: 1 })).toBe("1 Datei");
   });
 
+  it("number params follow the grouping of the language, text params stay as they are", () => {
+    expect(translate("en", "queue.count.other", { n: 12000 })).toBe("12,000 files");
+    expect(translate("de", "queue.count.other", { n: 12000 })).toBe("12.000 Dateien");
+    expect(translate("en", "queue.count.other", { n: 1234567 })).toBe("1,234,567 files");
+    expect(translate("de", "queue.count.other", { n: 1234567 })).toBe("1.234.567 Dateien");
+    expect(translate("en", "queue.count.one", { n: 1 })).toBe("1 file");
+    expect(translate("en", "queue.count.other", { n: "12000" })).toBe("12000 files");
+    expect(translate("de", "queue.count.other", { n: "12.000" })).toBe("12.000 Dateien");
+  });
+
+  it("number params of a Msg are formatted too", () => {
+    const m = { key: "notice.rejected.other", params: { n: 12000 } };
+    expect(msgText("en", m)).toBe("12,000 files do not match this mode and were not added.");
+    expect(msgText("de", m)).toBe("12.000 Dateien passen nicht zu diesem Modus und wurden nicht aufgenommen.");
+  });
+
   it("nested Msg params are translated", () => {
     const m = { key: "note.keptRecycleFailed", params: { reason: { key: "reason.readOnly" } } };
     expect(msgText("de", m)).toBe("Original behalten: Papierkorb nicht möglich (Datei ist schreibgeschützt)");

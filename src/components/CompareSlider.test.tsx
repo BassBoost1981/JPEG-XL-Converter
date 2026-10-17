@@ -61,6 +61,45 @@ describe("CompareSlider", () => {
     expect(screen.getByAltText("Nachher")).toHaveAttribute("src", dto.after);
   });
 
+  describe("auf Englisch", () => {
+    const en = { ...DEFAULT_SETTINGS, lang: "en" as const };
+
+    it("beschriftet Kopf, leeres Feld, Bilder, Trennlinie und rechtes Etikett", async () => {
+      setup([], en);
+      const a = render(<CompareSlider />);
+      await advance(0);
+      expect(screen.getByText("Before / After")).toBeInTheDocument();
+      expect(screen.getByText("No file selected")).toBeInTheDocument();
+      a.unmount();
+
+      setup([row(1, { status: "done", progress: 100, outSize: 5_700_000 })], en);
+      render(<CompareSlider />);
+      await advance(0);
+      expect(screen.getByAltText("Before")).toHaveAttribute("src", dto.before);
+      expect(screen.getByAltText("After")).toHaveAttribute("src", dto.after);
+      expect(screen.getByRole("slider", { name: "Divider" })).toBeInTheDocument();
+      expect(screen.getByText("JPG · 6.80 MB")).toBeInTheDocument();
+      expect(screen.getByText("JXL · lossless · 5.44 MB")).toBeInTheDocument();
+    });
+
+    it("nennt im Dec-Modus „Automatisch“ Original und zeigt den Vorschaufehler", async () => {
+      vi.mocked(backend.preview).mockRejectedValue(new Error("boom"));
+      const jxl: Row = {
+        ...row(1),
+        entry: { path: "C:\\Bilder\\a.jxl", root: null, kind: "jxl", size: 1024 * 1024, width: 10, height: 20 },
+      };
+      useApp.setState({
+        settings: { ...en, mode: "dec", decodeFormat: "auto" },
+        queues: { enc: [], dec: [jxl] },
+        selected: { enc: null, dec: 1 },
+      });
+      render(<CompareSlider />);
+      await advance(0);
+      expect(screen.getByText("Original")).toBeInTheDocument();
+      expect(screen.getByText("Preview unavailable")).toBeInTheDocument();
+    });
+  });
+
   it("verschiebt die Trennlinie beim Input auf 30 nach left: 30%", async () => {
     setup();
     render(<CompareSlider />);

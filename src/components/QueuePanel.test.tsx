@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { backend } from "../api";
@@ -138,8 +138,22 @@ describe("QueuePanel", () => {
     render(<QueuePanel />);
     for (let i = 0; i < 4; i++) await userEvent.tab();
     const tip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
-    expect(tip).toHaveTextContent("Original kept: Recycle Bin not possible (File is in use by another program)");
-    expect(tip).toHaveTextContent("File date not carried over");
+    expect(tip).toHaveTextContent(
+      "Original kept: Recycle Bin not possible (File is in use by another program) · File date not carried over",
+    );
+  });
+
+  it("übersetzt einen angezeigten Hinweis beim Sprachwechsel", async () => {
+    useApp.setState({
+      queues: { enc: [row(4, { status: "doneWithNote", outSize: 1, notes: [{ key: "note.keptNoRecycleBin" }] })], dec: [] },
+    });
+    render(<QueuePanel />);
+    for (let i = 0; i < 4; i++) await userEvent.tab();
+    expect(await screen.findByRole("tooltip", {}, { timeout: 3000 })).toHaveTextContent(
+      "Original behalten: kein Papierkorb auf diesem Laufwerk",
+    );
+    act(() => useApp.setState({ settings: { ...DEFAULT_SETTINGS, lang: "en" } }));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent("Original kept: no Recycle Bin on this drive");
   });
 
   it("sperrt „Leeren“ während eines Laufs", () => {
@@ -237,8 +251,71 @@ describe("QueuePanel", () => {
     render(<QueuePanel />);
     await useApp.getState().addPaths(["C:\\x.txt"]);
     expect(await screen.findByText("3 files do not match this mode and were not added.")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Dateien" }));
+    await userEvent.click(screen.getByRole("button", { name: "Files" }));
     await vi.waitFor(() => expect(files).toHaveBeenCalledWith("enc", { title: "Select files", filterImages: "Images" }));
+  });
+
+  describe("auf Englisch", () => {
+    beforeEach(() => useApp.setState({ settings: { ...DEFAULT_SETTINGS, lang: "en" } }));
+
+    it("beschriftet Kopf, Knöpfe, Spalten und Ablagefläche", () => {
+      const { unmount } = render(<QueuePanel />);
+      expect(screen.getByText("Queue")).toBeInTheDocument();
+      expect(screen.getByText("0 files")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Files" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Add folder" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Clear" })).toBeInTheDocument();
+      for (const col of ["File", "Original", "Result", "Savings", "Status"]) {
+        expect(screen.getByText(col)).toBeInTheDocument();
+      }
+      expect(screen.getByText("Drop images or folders here")).toBeInTheDocument();
+      expect(screen.getByText("JPEG, PNG, GIF, TIFF, WebP, BMP")).toBeInTheDocument();
+      unmount();
+
+      useApp.setState({ settings: { ...DEFAULT_SETTINGS, lang: "en", mode: "dec" } });
+      render(<QueuePanel />);
+      expect(screen.getByText("Change")).toBeInTheDocument();
+      expect(screen.getByText(".jxl files")).toBeInTheDocument();
+    });
+
+    it("zählt Dateien im Singular, Plural und mit Tausendertrennzeichen", () => {
+      useApp.setState({ queues: { enc: [row(1)], dec: [] } });
+      const a = render(<QueuePanel />);
+      expect(screen.getByText("1 file")).toBeInTheDocument();
+      a.unmount();
+
+      useApp.setState({ queues: { enc: Array.from({ length: 2000 }, (_, i) => row(500_000 + i)), dec: [] } });
+      render(<QueuePanel />);
+      expect(screen.getByText("2,000 files")).toBeInTheDocument();
+    });
+
+    it("zeigt die Statuschips", () => {
+      useApp.setState({
+        queues: {
+          enc: [
+            row(1),
+            row(2, { status: "running", progress: 42 }),
+            row(3, { status: "done", progress: 100, outSize: 1 }),
+            row(4, { status: "doneWithNote", progress: 100, outSize: 1 }),
+            row(5, { status: "skipped", progress: 100 }),
+            row(6, { status: "error", progress: 0 }),
+            row(7, { status: "verifyFailed", progress: 100 }),
+          ],
+          dec: [],
+        },
+      });
+      render(<QueuePanel />);
+      for (const t of ["Queued", "42 %", "Done", "Done with note", "Skipped", "Error", "Check failed"]) {
+        expect(screen.getByText(t)).toBeInTheDocument();
+      }
+    });
+
+    it("zeigt eine große Zahl abgelehnter Dateien englisch gruppiert", async () => {
+      vi.spyOn(backend, "addPaths").mockResolvedValue({ items: [], rejected: 12000 });
+      render(<QueuePanel />);
+      await useApp.getState().addPaths(["C:\\x.txt"]);
+      expect(await screen.findByText("12,000 files do not match this mode and were not added.")).toBeInTheDocument();
+    });
   });
 
   it("nennt eine abgelehnte Datei im Singular", async () => {

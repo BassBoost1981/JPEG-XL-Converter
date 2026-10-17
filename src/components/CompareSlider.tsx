@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../api";
 import type { InputKind, Mode, OutputFormat, PreviewDto } from "../api/types";
-import { useLang } from "../i18n/useT";
+import { useLang, useT } from "../i18n/useT";
 import { formatDistance, formatSize } from "../lib/format";
 import { toJobSettings } from "../state/settings";
 import { useApp } from "../state/store";
@@ -19,8 +19,8 @@ const KIND_LABEL: Record<InputKind, string> = {
   jxl: "JXL",
 };
 
-const FORMAT_LABEL: Record<OutputFormat, string> = {
-  auto: "Original",
+// "auto" shows the catalog's "Original".
+const FORMAT_LABEL: Record<Exclude<OutputFormat, "auto">, string> = {
   png: "PNG",
   jpg: "JPG",
   webp: "WEBP",
@@ -33,6 +33,7 @@ const TAG = "pointer-events-none absolute top-2.5 rounded-full px-2.5 py-1 text-
 
 export function CompareSlider() {
   const mode: Mode = useApp((s) => s.settings.mode);
+  const t = useT();
   const lang = useLang();
   const settings = useApp((s) => s.settings);
   const row = useApp((s) => {
@@ -112,14 +113,14 @@ export function CompareSlider() {
     : "";
   const rightTag = row
     ? mode === "enc"
-      ? `JXL · ${job.encode.distance === 0 ? "verlustfrei" : `d ${formatDistance(job.encode.distance)}`}${finishedSize}`
-      : `${FORMAT_LABEL[job.decode.format]}${finishedSize}`
+      ? `${job.encode.distance === 0 ? t("compare.jxlLossless") : `JXL · d ${formatDistance(job.encode.distance)}`}${finishedSize}`
+      : `${job.decode.format === "auto" ? t("col.original") : FORMAT_LABEL[job.decode.format]}${finishedSize}`
     : "";
 
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center gap-2 px-1 py-0.5">
-        <span className="font-semibold">Vorher / Nachher</span>
+        <span className="font-semibold">{t("compare.title")}</span>
         {row && (
           <span className="text-xs text-[var(--muted)]">
             {baseName(row.entry.path)} · {row.entry.width} × {row.entry.height}
@@ -129,7 +130,7 @@ export function CompareSlider() {
       <div ref={field} className="relative h-[240px] overflow-hidden rounded-[10px] bg-[repeating-linear-gradient(135deg,var(--stripe-a)_0_10px,var(--stripe-b)_10px_20px)]">
         {!row ? (
           <div className="absolute inset-0 flex items-center justify-center text-[var(--muted)]">
-            Keine Datei ausgewählt
+            {t("compare.none")}
           </div>
         ) : (
           <>
@@ -137,14 +138,14 @@ export function CompareSlider() {
               <>
                 <img
                   src={preview.before}
-                  alt="Vorher"
+                  alt={t("compare.before")}
                   draggable={false}
                   className="absolute inset-0 h-full w-full object-cover"
                 />
                 <img
                   data-testid="compare-after"
                   src={preview.after}
-                  alt="Nachher"
+                  alt={t("compare.after")}
                   draggable={false}
                   className="absolute inset-0 h-full w-full object-cover"
                   style={{ clipPath: `inset(0 0 0 ${split}%)` }}
@@ -153,7 +154,7 @@ export function CompareSlider() {
             )}
             {failed && (
               <div className="absolute inset-0 flex items-center justify-center text-[var(--muted)]">
-                Vorschau nicht möglich
+                {t("preview.unavailable")}
               </div>
             )}
             <span className={`${TAG} left-2.5 bg-[var(--overlay)]`}>{leftTag}</span>
@@ -172,7 +173,7 @@ export function CompareSlider() {
               min={0}
               max={100}
               value={split}
-              aria-label="Trennlinie"
+              aria-label={t("compare.divider")}
               onChange={(e) => setSplit(Number(e.target.value))}
               className="absolute inset-0 m-0 h-full w-full cursor-ew-resize opacity-0"
             />

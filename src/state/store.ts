@@ -98,7 +98,7 @@ export const useApp = create<AppState>()((set, get) => ({
           run: st.run === "finished" && fresh.length > 0 ? "idle" : st.run,
           notice:
             rejected > 0
-              ? { key: rejected === 1 ? "notice.rejected.one" : "notice.rejected.other", params: { n: String(rejected) } }
+              ? { key: rejected === 1 ? "notice.rejected.one" : "notice.rejected.other", params: { n: rejected } }
               : st.notice,
         };
       });
