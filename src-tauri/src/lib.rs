@@ -13,8 +13,13 @@ use tauri::{
     WebviewWindowBuilder, WindowEvent,
 };
 
+use serde_json::Value;
+
 use commands::AppState;
+use engine::i18n;
+use engine::msg::keys;
 use engine::tools::Tools;
+use engine::types::Lang;
 use window_state::WindowState;
 
 pub fn run() {
@@ -36,6 +41,15 @@ pub fn run() {
             let webview_dir = storage.webview_dir.clone();
             let window_file = storage.data_dir.join("window.json");
             let read_only = storage.read_only;
+            // The title is built in the language the UI will show, so it does
+            // not flicker when the frontend sets it a moment later.
+            let title = i18n::key(
+                startup_lang(
+                    settings_store::load(&storage.data_dir).as_ref(),
+                    commands::system_locale().as_deref(),
+                ),
+                keys::APP_TITLE,
+            );
             let state = AppState::new(app.handle().clone(), Tools::locate(&exe_dir), storage);
             app.manage(state);
 
@@ -43,7 +57,7 @@ pub fn run() {
             // WebView2 profile can live in the scratch folder instead of the
             // user profile.
             let window = WebviewWindowBuilder::new(app, "main", WebviewUrl::default())
-                .title("JPEG XL Converter")
+                .title(title)
                 .inner_size(1200.0, 760.0)
                 .min_inner_size(1000.0, 640.0)
                 .decorations(false)
@@ -92,6 +106,25 @@ pub fn run() {
             remove_work_dir(state.work_dir());
         }
     });
+}
+
+/// The language the UI starts in: the saved `lang` (`"de"` or `"en"`) from the
+/// settings, otherwise the Windows display language (`system`, a tag such as
+/// `de-DE`; German for `de`, `de-…` or `de_…` in any case, else English).
+fn startup_lang(saved: Option<&Value>, system: Option<&str>) -> Lang {
+    match saved.and_then(|s| s.get("lang")).and_then(Value::as_str) {
+        Some("de") => Lang::De,
+        Some("en") => Lang::En,
+        _ => lang_from_locale(system),
+    }
+}
+
+fn lang_from_locale(tag: Option<&str>) -> Lang {
+    let tag = tag.unwrap_or_default().trim().to_ascii_lowercase();
+    match tag.strip_prefix("de") {
+        Some(rest) if rest.is_empty() || rest.starts_with(['-', '_']) => Lang::De,
+        _ => Lang::En,
+    }
 }
 
 /// Puts the (still hidden) window where it was, or in the middle of the
@@ -165,5 +198,64 @@ fn remove_work_dir(dir: &Path) {
             Err(_) if attempt < ATTEMPTS => thread::sleep(Duration::from_millis(200)),
             Err(_) => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn saved_language_wins_over_the_system_language() {
+        let en = json!({ "lang": "en" });
+        let de = json!({ "lang": "de" });
+        assert_eq!(startup_lang(Some(&en), Some("de-DE")), Lang::En);
+        assert_eq!(startup_lang(Some(&de), Some("en-US")), Lang::De);
+        assert_eq!(startup_lang(Some(&de), None), Lang::De);
+    }
+
+    #[test]
+    fn missing_or_invalid_saved_language_follows_the_system() {
+        for saved in [
+            None,
+            Some(json!({})),
+            Some(json!({ "lang": null })),
+            Some(json!({ "lang": "fr" })),
+            Some(json!({ "lang": "DE" })),
+            Some(json!({ "lang": "" })),
+            Some(json!({ "lang": 5 })),
+            Some(json!("de")),
+            Some(json!(["de"])),
+        ] {
+            assert_eq!(
+                startup_lang(saved.as_ref(), Some("de-DE")),
+                Lang::De,
+                "{saved:?}"
+            );
+            assert_eq!(
+                startup_lang(saved.as_ref(), Some("en-US")),
+                Lang::En,
+                "{saved:?}"
+            );
+            assert_eq!(startup_lang(saved.as_ref(), None), Lang::En, "{saved:?}");
+        }
+    }
+
+    #[test]
+    fn windows_language_tags_in_all_spellings() {
+        for tag in ["de-DE", "de", "DE", "de_CH", "de-AT", "De-De", " de-DE "] {
+            assert_eq!(startup_lang(None, Some(tag)), Lang::De, "{tag:?}");
+        }
+        for tag in ["en-US", "fr-FR", "dsb-DE", "den", "", "-", "d"] {
+            assert_eq!(startup_lang(None, Some(tag)), Lang::En, "{tag:?}");
+        }
+        assert_eq!(startup_lang(None, None), Lang::En);
+    }
+
+    #[test]
+    fn window_title_comes_from_the_catalog_in_that_language() {
+        assert_eq!(i18n::key(Lang::De, keys::APP_TITLE), "JPEG XL Konverter");
+        assert_eq!(i18n::key(Lang::En, keys::APP_TITLE), "JPEG XL Converter");
     }
 }

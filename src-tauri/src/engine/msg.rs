@@ -57,6 +57,7 @@ macro_rules! define_keys {
 /// `log.*`, `preview.*` and where two would collide (`error.internal`/`reason.internal`).
 pub mod keys {
     define_keys! {
+        APP_TITLE = "app.title",
         TOOLS_MISSING = "banner.toolsMissing",
 
         KEPT_NO_RECYCLE_BIN = "note.keptNoRecycleBin",
