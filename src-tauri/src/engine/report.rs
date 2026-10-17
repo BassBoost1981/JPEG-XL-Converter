@@ -380,7 +380,7 @@ pub(crate) mod tests {
             "{text}"
         );
         assert!(
-            text.contains("Total: done 2, skipped 1, errors 2, 200 bytes → 410 bytes\r\n"),
+            text.contains("Total: 2 done, 1 skipped, 2 errors, 200 bytes → 410 bytes\r\n"),
             "{text}"
         );
         for (word, file, key) in [

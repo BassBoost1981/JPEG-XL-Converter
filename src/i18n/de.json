@@ -184,7 +184,7 @@
   "reason.inUse": "Datei wird von einem anderen Programm verwendet",
   "reason.windowsError": "Windows-Fehler {code}",
 
-  "tool.wontStart": "{name} startet nicht",
+  "tool.wontStart": "{name} startet nicht.",
   "tool.noResponse": "{name} antwortet nicht.",
   "tool.noVersion": "{name} liefert keine Versionsangabe.",
 

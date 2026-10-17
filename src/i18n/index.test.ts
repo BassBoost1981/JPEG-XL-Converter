@@ -73,6 +73,22 @@ describe("catalogs", () => {
     expect(translate("de", "cta.allDone")).toBe("Alles erledigt");
   });
 
+  it("tool messages end with a period (they are shown one per line)", () => {
+    for (const [lang, catalog] of [["de", de], ["en", en]] as const) {
+      const tool = Object.entries(catalog).filter(([key]) => key.startsWith("tool."));
+      expect(tool.length).toBeGreaterThan(0);
+      for (const [key, text] of tool) expect({ lang, key, endsWithPeriod: text.endsWith(".") }).toEqual({ lang, key, endsWithPeriod: true });
+    }
+    expect(translate("en", "tool.wontStart", { name: "cjxl.exe" })).toBe("cjxl.exe does not start.");
+    expect(translate("de", "tool.wontStart", { name: "cjxl.exe" })).toBe("cjxl.exe startet nicht.");
+  });
+
+  it("log totals read the same way in both languages", () => {
+    const p = { done: "2", skipped: "1", errors: "2", bytesIn: "200", bytesOut: "410" };
+    expect(translate("en", "log.totals", p)).toBe("Total: 2 done, 1 skipped, 2 errors, 200 bytes → 410 bytes");
+    expect(translate("de", "log.totals", p)).toBe("Summe: 2 fertig, 1 übersprungen, 2 Fehler, 200 Bytes → 410 Bytes");
+  });
+
   it("window title and log header differ by language", () => {
     expect(translate("de", "app.title")).toBe("JPEG XL Konverter");
     expect(translate("en", "app.title")).toBe("JPEG XL Converter");

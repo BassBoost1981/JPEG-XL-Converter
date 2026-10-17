@@ -184,7 +184,7 @@
   "reason.inUse": "File is in use by another program",
   "reason.windowsError": "Windows error {code}",
 
-  "tool.wontStart": "{name} does not start",
+  "tool.wontStart": "{name} does not start.",
   "tool.noResponse": "{name} does not respond.",
   "tool.noVersion": "{name} reports no version.",
 
@@ -200,7 +200,7 @@
   "log.settings.enc": "Distance {distance}, effort {effort}, transcode JPEG losslessly: {transcode}",
   "log.settings.dec": "Format {format}, JPEG quality {quality}, reduce to 8 bit: {reduce}",
   "log.settings.common": "{specific}, keep metadata: {metadata}, originals to Recycle Bin: {trash}, target: {target}",
-  "log.totals": "Total: done {done}, skipped {skipped}, errors {errors}, {bytesIn} bytes → {bytesOut} bytes",
+  "log.totals": "Total: {done} done, {skipped} skipped, {errors} errors, {bytesIn} bytes → {bytesOut} bytes",
   "log.yes": "yes",
   "log.no": "no",
   "log.automatic": "Automatic",
