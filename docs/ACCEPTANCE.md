@@ -16,7 +16,7 @@ of this list is [`ABNAHME.md`](ABNAHME.md).
 ## 0. Preparation
 
 - [ ] Start `JPEG XL Converter.exe` from the folder. There is **no** notice bar saying
-      "cjxl.exe or djxl.exe is missing" and the start button is not disabled.
+      "cjxl.exe or djxl.exe is missing next to the app." and the start button is not disabled.
 - [ ] A `data\` folder has appeared next to the exe.
 - [ ] The "Move originals to Recycle Bin after check" switch is **off** at start
       (also after a restart, even if it was on before).
@@ -140,14 +140,18 @@ and the CSV from step 1.
 ## 6. Portable from the USB stick
 
 The app folder `JPEG XL Converter\` (with the three `.exe` files and `LICENSES\`, **without**
-`data\`) sits on a USB stick, and the check runs from there.
+`data\`) sits on a USB stick, and the check runs from there. If the start in step 0 already
+created a `data\` folder next to the exe, **delete it before copying to the stick** (or copy a
+freshly built package), so that `data\` is really created anew on the stick.
 
 - [ ] Beforehand, note which folders exist under `%APPDATA%` and `%LOCALAPPDATA%` (for
       example write down the names in both folders or save the folder listings).
 - [ ] Start `JPEG XL Converter.exe` **from the stick**. `data\` is created next to the exe.
 - [ ] In the app settings (sliders button in the title bar), set **Language** to "Deutsch" and
       **Appearance** to the respective other setting (Light ↔ Dark). The whole interface
-      switches language at once, including the window title.
+      switches language at once. The window title changes too, to "JPEG XL Konverter". The
+      window has no Windows title bar and the in-app bar only shows "JPEG XL"; you can see the
+      title in the tooltip of the taskbar button (hover over it) or in the Alt+Tab view.
 - [ ] **Close** the window with the close button. It closes and the process ends.
       `%TEMP%\jpeg-xl-konverter\<pid>` including `webview` is gone afterwards.
 - [ ] **Start the app from the stick again:** language and appearance are still what you set
@@ -158,10 +162,15 @@ The app folder `JPEG XL Converter\` (with the three `.exe` files and `LICENSES\`
       The listings match the note from above. Folders of an earlier version may be there; the
       app neither picks them up nor deletes them (you can delete them by hand).
 - [ ] Optional, read-only mode: lock the stick with its write-protect switch (or put the app
-      folder in a place without write permission) and start the app. An existing
-      `data\settings.json` is read (language and appearance are right), once per start the notice
-      "App folder is read-only – settings are not saved, logs go to the temp folder." appears,
-      changes take effect but are not saved, and the log is in `%TEMP%\jpeg-xl-konverter\logs\`.
+      folder in a place without write permission) and start the app.
+      - An existing `data\settings.json` is read (language and appearance match what you set
+        last).
+      - Once per start the notice appears in the **language set above** (here: German, because
+        the previous step switched to it). German: "Programmordner ist schreibgeschützt –
+        Einstellungen werden nicht gespeichert, Protokolle liegen im Temp-Ordner." English:
+        "App folder is read-only – settings are not saved, logs go to the temp folder."
+      - Changes take effect but are not saved.
+      - The log is in `%TEMP%\jpeg-xl-konverter\logs\`.
 
 ## 7. No network access
 
