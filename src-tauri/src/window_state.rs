@@ -37,10 +37,18 @@ pub fn save(path: &Path, s: &WindowState) -> io::Result<()> {
 pub fn visible_on(s: &WindowState, monitors: &[(i32, i32, u32, u32)]) -> bool {
     /// The part of the title strip that has to show, in pixels (both ways).
     const MIN_SHOWN: i64 = 100;
+    /// How far above a monitor's top edge the window may start and still count
+    /// as sitting on it. A snapped window reports its outer position a few
+    /// pixels outside the monitor (Windows' invisible border, e.g. y = -8).
+    const TOP_OVERSHOOT: i64 = 16;
     let (left, right) = (i64::from(s.x), i64::from(s.x) + i64::from(s.width));
-    let (top, bottom) = (i64::from(s.y), i64::from(s.y) + MIN_SHOWN);
     monitors.iter().any(|&(mx, my, mw, mh)| {
         let (mx, my) = (i64::from(mx), i64::from(my));
+        let mut top = i64::from(s.y);
+        if (my - TOP_OVERSHOOT..my).contains(&top) {
+            top = my;
+        }
+        let bottom = top + MIN_SHOWN;
         let shown_w = cmp::min(right, mx + i64::from(mw)) - cmp::max(left, mx);
         let shown_h = cmp::min(bottom, my + i64::from(mh)) - cmp::max(top, my);
         shown_w >= MIN_SHOWN && shown_h >= MIN_SHOWN
@@ -162,8 +170,26 @@ mod tests {
         // Title strip pushed under the bottom edge: only 99 px of it remain.
         assert!(visible_on(&state(0, 980, 1200, 760), &[PRIMARY]));
         assert!(!visible_on(&state(0, 981, 1200, 760), &[PRIMARY]));
-        // Title strip above the top edge.
-        assert!(!visible_on(&state(0, -1, 1200, 760), &[PRIMARY]));
+        // Title strip well above the top edge.
+        assert!(!visible_on(&state(0, -17, 1200, 760), &[PRIMARY]));
+    }
+
+    #[test]
+    fn visible_on_edge_snapped_window_with_negative_border_overshoot() {
+        // Windows reports the outer position of a snapped window a few pixels
+        // outside the monitor (invisible border), e.g. y = -7 or -8.
+        assert!(visible_on(&state(0, -8, 960, 1080), &[PRIMARY]));
+        assert!(visible_on(&state(-8, -8, 960, 1080), &[PRIMARY]));
+        assert!(visible_on(&state(0, -16, 1200, 760), &[PRIMARY]));
+        // Same on a monitor that does not start at y = 0.
+        assert!(visible_on(
+            &state(100, 592, 1200, 760),
+            &[(0, 600, 1920, 1080)]
+        ));
+        // A window genuinely off-screen above stays invisible.
+        assert!(!visible_on(&state(0, -200, 1200, 760), &[PRIMARY]));
+        assert!(!visible_on(&state(0, -100, 1200, 760), &[PRIMARY]));
+        assert!(!visible_on(&state(0, -17, 1200, 760), &[PRIMARY]));
     }
 
     #[test]
