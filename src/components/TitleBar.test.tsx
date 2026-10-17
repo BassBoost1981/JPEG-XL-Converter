@@ -18,7 +18,7 @@ function stubMatchMedia(dark: boolean) {
 beforeEach(() => {
   stubMatchMedia(false);
   vi.spyOn(backend, "saveSettings").mockResolvedValue();
-  useApp.setState({ settings: DEFAULT_SETTINGS, run: "idle" });
+  useApp.setState({ settings: DEFAULT_SETTINGS, systemLang: "de", run: "idle" });
   document.documentElement.classList.remove("dark");
 });
 
@@ -28,14 +28,34 @@ afterEach(() => {
 });
 
 describe("TitleBar", () => {
-  it("zeigt Logo, Name, Tabs und Schalter", () => {
+  it("zeigt Logo, Name, Tabs und den Knopf „Programm-Einstellungen“", () => {
     render(<TitleBar />);
     expect(screen.getByRole("img", { name: "JPEG XL Konverter" })).toHaveAttribute("src", expect.stringMatching(/svg|jxl-logo-v2/));
     expect(screen.getByText("JPEG XL")).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "In JPEG XL" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Aus JPEG XL" })).toBeInTheDocument();
-    expect(screen.getByRole("switch", { name: "Hell" })).not.toBeChecked();
-    expect(screen.getByRole("switch", { name: "Experte" })).not.toBeChecked();
+    expect(screen.getByRole("tablist", { name: "Richtung" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Programm-Einstellungen" })).toBeInTheDocument();
+  });
+
+  it("hat die Schalter „Hell/Dunkel“ und „Experte“ nicht mehr", () => {
+    render(<TitleBar />);
+    expect(screen.queryByRole("switch")).not.toBeInTheDocument();
+    expect(screen.queryByText("Hell")).not.toBeInTheDocument();
+    expect(screen.queryByText("Experte")).not.toBeInTheDocument();
+  });
+
+  it("zeigt alle Texte in der gewählten Sprache", () => {
+    useApp.setState({ settings: { ...DEFAULT_SETTINGS, lang: "en" } });
+    render(<TitleBar />);
+    expect(screen.getByRole("img", { name: "JPEG XL Converter" })).toBeInTheDocument();
+    expect(screen.getByRole("tablist", { name: "Direction" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "To JPEG XL" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: "From JPEG XL" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "App settings" })).toBeInTheDocument();
+    for (const name of ["Minimize", "Maximize", "Close"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
   });
 
   it("Klick auf „Aus JPEG XL“ setzt den Modus", async () => {
@@ -53,28 +73,20 @@ describe("TitleBar", () => {
     expect(useApp.getState().settings.mode).toBe("enc");
   });
 
-  it("der Experten-Schalter setzt expert", async () => {
+  it("der Knopf öffnet das Klappfenster, in dem Erscheinungsbild und Modus geschaltet werden", async () => {
     render(<TitleBar />);
-    await userEvent.click(screen.getByRole("switch", { name: "Experte" }));
-    expect(useApp.getState().settings.expert).toBe(true);
-  });
-
-  it("der Hell/Dunkel-Schalter setzt die Klasse dark und speichert das Thema", async () => {
-    render(<TitleBar />);
-    await userEvent.click(screen.getByRole("switch", { name: "Hell" }));
+    await userEvent.click(screen.getByRole("button", { name: "Programm-Einstellungen" }));
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Dunkel" }));
     expect(document.documentElement).toHaveClass("dark");
-    expect(useApp.getState().settings.theme).toBe("dark");
-    expect(screen.getByRole("switch", { name: "Dunkel" })).toBeChecked();
-    await userEvent.click(screen.getByRole("switch", { name: "Dunkel" }));
-    expect(document.documentElement).not.toHaveClass("dark");
-    expect(useApp.getState().settings.theme).toBe("light");
+    await userEvent.click(screen.getByRole("button", { name: "Experte" }));
+    expect(useApp.getState().settings).toMatchObject({ theme: "dark", expert: true });
   });
 
   it("Thema null folgt der Systemeinstellung", () => {
     stubMatchMedia(true);
     render(<TitleBar />);
     expect(document.documentElement).toHaveClass("dark");
-    expect(screen.getByRole("switch", { name: "Dunkel" })).toBeChecked();
   });
 
   it("Fensterknöpfe rufen das Backend", async () => {
@@ -93,7 +105,11 @@ describe("TitleBar", () => {
   it("der Bereich ist Ziehfläche, die Bedienelemente nicht", () => {
     const { container } = render(<TitleBar />);
     expect(container.firstElementChild).toHaveAttribute("data-tauri-drag-region");
-    for (const el of [screen.getByRole("tablist"), screen.getByRole("switch", { name: "Experte" }), screen.getByRole("button", { name: "Schließen" })]) {
+    for (const el of [
+      screen.getByRole("tablist"),
+      screen.getByRole("button", { name: "Programm-Einstellungen" }),
+      screen.getByRole("button", { name: "Schließen" }),
+    ]) {
       expect(el).not.toHaveAttribute("data-tauri-drag-region");
     }
   });

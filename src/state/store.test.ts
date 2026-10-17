@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ToolStatus } from "../api/types";
 import { DEFAULT_SETTINGS } from "./settings";
 
 let dispose: () => void;
@@ -183,6 +184,37 @@ describe("useApp", () => {
       vi.spyOn(backend, "systemLocale").mockResolvedValue(null);
       await reinit();
       expect(useApp.getState().systemLang).toBe("en");
+    });
+
+    it("Windows-Sprache, Speicherinfo und Einstellungen sind da, bevor die Werkzeugprüfung fertig ist", async () => {
+      await backend.saveSettings({ ...DEFAULT_SETTINGS, preset: "hi", lang: "en" });
+      vi.spyOn(backend, "systemLocale").mockResolvedValue("de-DE");
+      vi.spyOn(backend, "storageInfo").mockResolvedValue({ readOnly: true });
+      let finishTools!: (s: ToolStatus) => void;
+      vi.spyOn(backend, "checkTools").mockReturnValue(new Promise<ToolStatus>((resolve) => (finishTools = resolve)));
+      useApp.setState({ systemLang: "en", readOnly: false, settings: DEFAULT_SETTINGS, tools: null });
+      dispose();
+      const ready = useApp.getState().init();
+      await vi.advanceTimersByTimeAsync(0);
+      // The tool check is still running, yet everything that decides the language is known.
+      expect(useApp.getState()).toMatchObject({
+        tools: null,
+        systemLang: "de",
+        readOnly: true,
+        settings: { preset: "hi", lang: "en" },
+      });
+      const tools: ToolStatus = { ok: true, cjxlVersion: "0.12", djxlVersion: "0.12", messages: [] };
+      finishTools(tools);
+      dispose = await ready;
+      expect(useApp.getState().tools).toEqual(tools);
+    });
+
+    it("eine fehlgeschlagene Werkzeugprüfung verzögert die Sprache nicht und ändert das Fehlerverhalten nicht", async () => {
+      vi.spyOn(backend, "systemLocale").mockResolvedValue("de-DE");
+      vi.spyOn(backend, "checkTools").mockRejectedValue({ key: "error.internal" });
+      useApp.setState({ systemLang: "en", notice: null });
+      await reinit();
+      expect(useApp.getState()).toMatchObject({ systemLang: "de", notice: { key: "error.internal" } });
     });
 
     it("übernimmt den Nur-Lesen-Zustand des Speichers", async () => {

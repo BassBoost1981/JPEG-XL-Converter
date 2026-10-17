@@ -224,29 +224,41 @@ export const useApp = create<AppState>()((set, get) => ({
       backend.onRunFinished((s) => get().finished(s)),
       backend.onFilesDropped((paths) => void get().addPaths(paths)),
     ];
-    try {
-      set({ tools: await backend.checkTools() });
-    } catch (e) {
-      set({ notice: errorMsg(e) });
-    }
-    // Without a Windows language or storage state: English and writable, no notice.
-    try {
-      set({ systemLang: langFromLocale(await backend.systemLocale()) });
-    } catch {
-      set({ systemLang: langFromLocale(null) });
-    }
-    try {
-      set({ readOnly: (await backend.storageInfo()).readOnly });
-    } catch {
-      set({ readOnly: false });
-    }
-    try {
-      const saved = await backend.loadSettings();
-      // The recycle-bin switch always starts off (Global Constraints).
-      if (saved) set({ settings: { ...restoreSettings(saved), trashOriginals: false } });
-    } catch {
-      // Unreadable settings: keep defaults.
-    }
+    // Language, storage state and saved settings are started first and applied as soon as each one is in,
+    // without waiting for the (slower) tool check, so the first frames are not in the wrong language.
+    const loadLanguage = async () => {
+      // Without a Windows language: English, no notice.
+      try {
+        set({ systemLang: langFromLocale(await backend.systemLocale()) });
+      } catch {
+        set({ systemLang: langFromLocale(null) });
+      }
+    };
+    const loadStorage = async () => {
+      // Without storage state: writable, no notice.
+      try {
+        set({ readOnly: (await backend.storageInfo()).readOnly });
+      } catch {
+        set({ readOnly: false });
+      }
+    };
+    const loadSaved = async () => {
+      try {
+        const saved = await backend.loadSettings();
+        // The recycle-bin switch always starts off (Global Constraints).
+        if (saved) set({ settings: { ...restoreSettings(saved), trashOriginals: false } });
+      } catch {
+        // Unreadable settings: keep defaults.
+      }
+    };
+    const loadTools = async () => {
+      try {
+        set({ tools: await backend.checkTools() });
+      } catch (e) {
+        set({ notice: errorMsg(e) });
+      }
+    };
+    await Promise.all([loadLanguage(), loadStorage(), loadSaved(), loadTools()]);
     // A pending save is written when the page goes away; losing it would only lose the last change.
     const flush = () => {
       if (saveTimer === undefined) return;

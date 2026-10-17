@@ -7,6 +7,8 @@ import { RunFooter } from "./components/RunFooter";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TitleBar } from "./components/TitleBar";
 import { ToolsBanner } from "./components/ToolsBanner";
+import { translate } from "./i18n";
+import { useLang } from "./i18n/useT";
 import { useApp } from "./state/store";
 
 const CARD = "rounded-[14px] bg-[var(--card)] shadow-[var(--card-shadow)]";
@@ -17,6 +19,7 @@ function Card({ className = "", children }: { className?: string; children: Reac
 
 function App() {
   const toolsMissing = useApp((s) => s.tools?.ok === false);
+  const lang = useLang();
   const [confirmClose, setConfirmClose] = useState(false);
   const closeAllowed = useRef(false);
 
@@ -24,6 +27,12 @@ function App() {
     const ready = useApp.getState().init();
     return () => void ready.then((dispose) => dispose());
   }, []);
+
+  // Window title and document language follow the language in use (also on the first render).
+  useEffect(() => {
+    backend.setTitle(translate(lang, "app.title"));
+    document.documentElement.lang = lang;
+  }, [lang]);
 
   useEffect(
     () =>
