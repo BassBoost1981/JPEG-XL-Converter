@@ -1,6 +1,7 @@
 # Builds the app without installer and assembles the portable folder:
-#   dist-portable\JPEG XL Konverter\
-#     JPEG XL Konverter.exe, cjxl.exe, djxl.exe, LICENSES\
+#   dist-portable\JPEG XL Converter\
+#     JPEG XL Converter.exe, cjxl.exe, djxl.exe, LICENSES\
+# No data\ folder is shipped; the app creates it next to the exe on first start.
 # Needs the sidecars from scripts\fetch-libjxl.ps1 and `npm install` done.
 
 $ErrorActionPreference = 'Stop'
@@ -12,12 +13,12 @@ if ($LASTEXITCODE -ne 0) { throw 'tauri build failed' }
 
 $Release = Join-Path $Root 'src-tauri\target\release'
 $Bin = Join-Path $Root 'src-tauri\binaries'
-$Out = Join-Path $Root 'dist-portable\JPEG XL Konverter'
+$Out = Join-Path $Root 'dist-portable\JPEG XL Converter'
 if (Test-Path $Out) { Remove-Item $Out -Recurse -Force }
 New-Item -ItemType Directory -Path (Join-Path $Out 'LICENSES') -Force | Out-Null
 
 # The cargo package is called jpeg-xl-konverter; the portable exe gets the product name.
-Copy-Item (Join-Path $Release 'jpeg-xl-konverter.exe') (Join-Path $Out 'JPEG XL Konverter.exe')
+Copy-Item (Join-Path $Release 'jpeg-xl-konverter.exe') (Join-Path $Out 'JPEG XL Converter.exe')
 Copy-Item (Join-Path $Bin 'cjxl-x86_64-pc-windows-msvc.exe') (Join-Path $Out 'cjxl.exe')
 Copy-Item (Join-Path $Bin 'djxl-x86_64-pc-windows-msvc.exe') (Join-Path $Out 'djxl.exe')
 

@@ -18,10 +18,6 @@ pub struct Storage {
     /// Scratch folder of this process: `%TEMP%\jpeg-xl-konverter\<pid>`.
     pub work_dir: PathBuf,
     /// WebView2 profile folder (inside `work_dir`, so it vanishes on exit).
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "not read until the WebView is pointed at it")
-    )]
     pub webview_dir: PathBuf,
 }
 
