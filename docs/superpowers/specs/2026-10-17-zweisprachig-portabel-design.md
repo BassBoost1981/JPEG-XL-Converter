@@ -32,9 +32,9 @@ Die App soll auch für englischsprachige Menschen nutzbar sein, und das Projekt 
 
 - Ein englischer Bildschirm mit einem deutschen Hinweis darin, oder umgekehrt.
 - Die Sicherheitslogik (Prüfung, Papierkorb-Regeln) ändert durch den Umbau der Meldungen ihr Verhalten. Hier ändern sich nur **Texte**, keine Entscheidungen. Alle bestehenden Tests müssen unverändert grün bleiben, abgesehen von Stellen, die wörtlich einen deutschen Text erwartet haben.
-- Die App schreibt bei Nutzung vom USB-Stick Einstellungen, Protokolle oder WebView-Daten in das Benutzerprofil des PCs (siehe 7.3 für die einzige Ausnahme).
+- Die App legt im Benutzerprofil des PCs einen eigenen Ordner an oder schreibt dort Einstellungen, Protokolle oder WebView-Daten. Einzige Ausnahme ist der Temp-Ordner (siehe 7.3). Das gilt auch, wenn der Programmordner schreibgeschützt ist (siehe 7.2).
 - Die App nimmt Netzwerkverbindungen auf (das gilt schon heute, CSP `connect-src ipc:`).
-- Vorhandene Einstellungen gehen beim Update verloren. Eine `settings.json` ohne Sprachfeld wird wie ein erster Start behandelt (Sprache aus Windows), alles andere bleibt erhalten.
+- Einstellungen aus `data\settings.json` gehen bei einem späteren Update verloren. Fehlende Felder (z. B. ein künftig neues) werden mit Standardwerten ergänzt, alles andere bleibt erhalten.
 
 ## 5. Programm-Einstellungen (Klappfenster)
 
@@ -117,24 +117,32 @@ Alles, was die App dauerhaft speichert, liegt in einem Ordner **`data\` neben `J
 | Einstellungen (`settings.json`) | App-Konfigurationsordner unter `%APPDATA%` | `data\settings.json` |
 | Fenstergröße/-position (window-state) | App-Konfigurationsordner unter `%APPDATA%` | `data\` (eigene Speicherung oder Plugin-Pfad umgelenkt, [Builder]) |
 | Protokolle | `%LOCALAPPDATA%\JPEG XL Konverter\Protokolle` | `data\logs\` |
-| WebView2-Benutzerdaten (Cache, LocalStorage) | `%LOCALAPPDATA%\<identifier>\EBWebView` | `data\webview\` (Tauri: Datenverzeichnis des Webviews setzen) |
+| WebView2-Benutzerdaten (nur Browser-Cache, die Oberfläche speichert selbst nichts im WebView) | `%LOCALAPPDATA%\<identifier>\EBWebView` | `%TEMP%\jpeg-xl-konverter\<pid>\webview\`, wird beim Beenden mit dem Arbeitsordner gelöscht. Tauri: Datenverzeichnis des Webviews setzen, also das Fenster im Code statt in `tauri.conf.json` anlegen, [Builder]. |
 
-`open_log` erlaubt künftig nur Pfade innerhalb von `data\logs\` (bisher der alte Protokollordner).
+`open_log` erlaubt künftig nur Pfade innerhalb des aktuellen Protokollordners (`data\logs\` bzw. im Nur-Lesen-Modus der Temp-Protokollordner aus 7.2).
 
-### 7.2 Nicht beschreibbarer Programmordner [Meine Entscheidung]
+**Warum WebView-Daten im Temp-Ordner und nicht auf dem Stick [Meine Entscheidung]:** Die Oberfläche legt dort nichts Wichtiges ab, nur Browser-Cache. Auf dem Stick würde er bei jedem Start langsam neu geschrieben, und ein WebView2-Profil einer neueren Version könnte auf einem PC mit älterem WebView2 Probleme machen.
 
-Liegt das Programm an einem schreibgeschützten Ort (z. B. schreibgeschützter Stick oder `C:\Program Files`), weicht die App auf `%LOCALAPPDATA%\JPEG XL Converter\` mit denselben Unterordnern aus und zeigt einmalig einen Hinweis im Hinweisbalken: „Programmordner ist schreibgeschützt – Einstellungen werden auf diesem PC gespeichert.“ / „App folder is read-only – settings are stored on this PC.“
+### 7.2 Nicht beschreibbarer Programmordner: Nur-Lesen-Modus [Meine Entscheidung]
+
+Liegt das Programm an einem schreibgeschützten Ort (schreibgeschützter Stick, `C:\Program Files`, Netzlaufwerk ohne Schreibrecht), hinterlässt die App trotzdem nichts im Benutzerprofil:
+
+- Eine vorhandene `data\settings.json` wird **gelesen**, damit Sprache und Darstellung auch auf einem gesperrten Stick mitkommen.
+- Änderungen an Einstellungen wirken sofort, werden aber **nicht gespeichert**.
+- Protokolle landen in `%TEMP%\jpeg-xl-konverter\logs\` (bleiben dort, bis Windows den Temp-Ordner aufräumt; „Protokoll öffnen“ funktioniert).
+- Fensterposition wird nicht gespeichert.
+- Einmal pro Start erscheint im Hinweisbalken: „Programmordner ist schreibgeschützt – Einstellungen werden nicht gespeichert, Protokolle liegen im Temp-Ordner.“ / „App folder is read-only – settings are not saved, logs go to the temp folder.“
 
 ### 7.3 Was auf dem PC bleibt
 
-- **Zwischendateien** liegen weiterhin im Temp-Ordner des PCs (`%TEMP%\jpeg-xl-konverter\<pid>`), weil das auf einem USB-Stick deutlich langsamer wäre. Sie werden beim Beenden gelöscht, wie heute. [Meine Entscheidung]
+- Nur der **Temp-Ordner** des PCs wird benutzt: Zwischendateien und WebView-Daten in `%TEMP%\jpeg-xl-konverter\<pid>` (beim Beenden gelöscht, wie heute) und im Nur-Lesen-Modus die Protokolle. Zwischendateien bleiben dort, weil das auf einem USB-Stick deutlich langsamer wäre. [Meine Entscheidung]
 - Die umgewandelten Dateien landen dort, wo der Nutzer es einstellt (neben dem Original oder im gewählten Ausgabeordner).
 
 ### 7.4 Voraussetzungen
 
 - Windows 11 (x64). WebView2 ist dort fest eingebaut, deshalb wird keine eigene Laufzeit mitgeliefert. Fehlt WebView2 doch, zeigt Windows/Tauri seine Standardmeldung. Das wird in der README erwähnt.
 - Keine Installation, keine Registry-Einträge der App selbst (das Lesen der Papierkorb-Einstellungen bleibt wie heute).
-- Alte Daten im Benutzerprofil (bisherige `settings.json`, alte Protokolle) werden **nicht** übernommen oder gelöscht. Beim ersten Start der neuen Version gelten Standardwerte, die Sprache kommt aus Windows. [Meine Entscheidung; der Nutzer hat die App bisher nur testweise benutzt]
+- Alte Daten im Benutzerprofil der bisherigen Version (`%APPDATA%\de.bassboost1981.jpegxlkonverter\settings.json`, `%LOCALAPPDATA%\JPEG XL Konverter\Protokolle`, alte WebView-Daten) werden **nicht** übernommen und **nicht** gelöscht. Beim ersten Start der neuen Version gelten Standardwerte, die Sprache kommt aus Windows. Die README erwähnt, dass man diese alten Ordner von Hand löschen kann. [Meine Entscheidung; die App wurde bisher nur testweise benutzt]
 
 ## 8. Programmname
 
@@ -149,7 +157,7 @@ Liegt das Programm an einem schreibgeschützten Ort (z. B. schreibgeschützter S
 - **Screenshots je Sprache**, hell und dunkel (über `<picture>` passend zum GitHub-Design): `docs/screenshots/app-en-light.png`, `app-en-dark.png`, `app-de-hell.png`, `app-de-dunkel.png`. Die bisherigen zwei Dateien werden ersetzt. Aufgenommen wie zuletzt aus der Oberfläche im Demo-Modus mit den Beispieldaten, 1200 × 760 in doppelter Auflösung. Zusätzlich ein Screenshot mit **geöffnetem Klappfenster** je Sprache (hell) für den Abschnitt „Settings/Einstellungen“ der README. [Meine Entscheidung]
 - Das Skript, mit dem die Screenshots entstehen (Edge ohne Fenster plus DevTools-Protokoll), kommt nach `scripts/readme-screenshots.mjs`, damit man sie bei Änderungen neu erzeugen kann. [Meine Entscheidung]
 - **Repo-Beschreibung** auf Englisch: „Windows app to convert images to JPEG XL and back – JPEGs losslessly transcoded and verified byte for byte; originals only go to the Recycle Bin after a passed check. Portable, fully offline.“ [Annahme bestätigt, Zusatz „Portable, fully offline“ ist meine Entscheidung]
-- **Abnahme:** `docs/ABNAHME.md` bleibt deutsch, `docs/ACCEPTANCE.md` kommt als englische Fassung dazu. Beide werden an den neuen Programmnamen, den `data\`-Ordner und einen zusätzlichen Schritt „von einem USB-Stick starten, Einstellungen bleiben auf dem Stick, auf dem PC entsteht nichts im Benutzerprofil“ angepasst.
+- **Abnahme:** `docs/ABNAHME.md` bleibt deutsch, `docs/ACCEPTANCE.md` kommt als englische Fassung dazu. Beide werden an den neuen Programmnamen, den `data\`-Ordner und einen zusätzlichen Schritt angepasst: vom USB-Stick starten, Sprache und Darstellung umstellen, schließen, wieder starten (Einstellungen bleiben), und prüfen, dass unter `%APPDATA%` und `%LOCALAPPDATA%` kein App-Ordner entstanden ist.
 - `docs/design/` enthält den neuen Entwurfsstand (bereits auf diesem Branch).
 
 ## 10. Ablauf
@@ -168,8 +176,8 @@ Liegt das Programm an einem schreibgeschützten Ort (z. B. schreibgeschützter S
   - Sprachwechsel übersetzt bereits angezeigte Hinweise.
   - Klappfenster: öffnet/schließt (Knopf, Klick daneben, Esc), drei Zeilen, Modus gesperrt während Lauf, Fenstertitel wird gesetzt.
   - Protokolldatei auf Englisch, wenn der Lauf auf Englisch gestartet wurde.
-  - Datenordner: `data\` neben der Exe wird benutzt; bei nicht beschreibbarem Programmordner wird auf `%LOCALAPPDATA%\JPEG XL Converter\` ausgewichen.
-- Am Ende: portabler Build, einmal von einem anderen Laufwerk starten und prüfen, dass `data\` neben der Exe entsteht und im Benutzerprofil kein neuer App-Ordner angelegt wurde (abgesehen von Temp). Das Fenster muss sich schließen lassen.
+  - Datenordner: `data\` neben der Exe wird benutzt; bei nicht beschreibbarem Programmordner greift der Nur-Lesen-Modus (vorhandene Einstellungen gelesen, nichts gespeichert, Protokolle im Temp-Ordner, Hinweis angezeigt, kein Ordner im Benutzerprofil).
+- Am Ende: portabler Build, einmal von einem anderen Laufwerk starten und prüfen, dass `data\` neben der Exe entsteht und unter `%APPDATA%` und `%LOCALAPPDATA%` kein neuer App-Ordner angelegt wurde (abgesehen von Temp). Das Fenster muss sich schließen lassen, danach ist `%TEMP%\jpeg-xl-konverter\<pid>` samt WebView-Daten weg.
 
 ## 12. Dem Builder überlassen
 
