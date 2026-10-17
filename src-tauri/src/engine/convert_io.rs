@@ -13,7 +13,7 @@
 //! multi-page TIFF or animated WebP is converted from its first page or frame
 //! only, and the rest is `Lost`.
 //!
-//! User-facing errors are short German texts without library detail.
+//! User-facing errors are `Msg` keys without library detail.
 
 use std::fs::{self, File};
 use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
@@ -27,6 +27,7 @@ use image::{
 };
 use tiff::tags::Tag;
 
+use super::msg::{Msg, keys};
 use super::types::OutputFormat;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,15 +59,15 @@ impl MetaTransfer {
     }
 }
 
-const OPEN_ERROR: &str = "Datei lässt sich nicht öffnen";
-const READ_ERROR: &str = "Bild lässt sich nicht lesen";
-const WRITE_ERROR: &str = "Datei lässt sich nicht schreiben";
-const EDIT_ERROR: &str = "Datei lässt sich nicht bearbeiten";
-const TOO_BIG_ERROR: &str = "Bild ist zu groß zum Umwandeln";
-const FORMAT_ERROR: &str = "Ausgabeformat wird nicht unterstützt";
-const SOURCE_FORMAT_ERROR: &str = "Format wird hier nicht unterstützt";
-const CMYK_ERROR: &str = "CMYK-Bilder werden nicht unterstützt";
-const FLOAT_ERROR: &str = "Gleitkomma-Bilder werden nicht unterstützt";
+const OPEN_ERROR: &str = keys::CANNOT_OPEN;
+const READ_ERROR: &str = keys::CANNOT_READ;
+const WRITE_ERROR: &str = keys::CANNOT_WRITE;
+const EDIT_ERROR: &str = keys::CANNOT_EDIT;
+const TOO_BIG_ERROR: &str = keys::IMAGE_TOO_BIG;
+const FORMAT_ERROR: &str = keys::OUTPUT_FORMAT_UNSUPPORTED;
+const SOURCE_FORMAT_ERROR: &str = keys::FORMAT_UNSUPPORTED;
+const CMYK_ERROR: &str = keys::CMYK_UNSUPPORTED;
+const FLOAT_ERROR: &str = keys::FLOAT_UNSUPPORTED;
 
 /// Largest decoded image accepted. The image crate's default of 512 MiB would
 /// turn away big 16-bit scans.
@@ -88,7 +89,7 @@ fn lost(present: bool) -> MetaState {
 
 /// Converts a TIFF, WebP or BMP (recognised by content, not by extension) to a
 /// PNG that cjxl can take. 8 and 16 bit stay as they are. Anything the PNG
-/// cannot hold without changing the pixels is refused with a German error
+/// cannot hold without changing the pixels is refused with an error message
 /// instead: any other file format, CMYK images (the image crate converts them
 /// to RGB by a naive formula and drops the K channel) and float images (16 bit
 /// would round them).
@@ -111,23 +112,23 @@ fn lost(present: bool) -> MetaState {
 /// converted; if there are more, `frames` is `Lost`.
 ///
 /// A failed conversion leaves no output file behind.
-pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTransfer, String> {
+pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTransfer, Msg> {
     let reader = open_reader(src)?;
     let format = reader.format();
     match format {
         Some(ImageFormat::Tiff | ImageFormat::WebP | ImageFormat::Bmp) => {}
-        Some(_) => return Err(SOURCE_FORMAT_ERROR.to_string()),
-        None => return Err(READ_ERROR.to_string()),
+        Some(_) => return Err(Msg::new(SOURCE_FORMAT_ERROR)),
+        None => return Err(Msg::new(READ_ERROR)),
     }
     let mut decoder = decoder_for(reader)?;
     if matches!(
         decoder.original_color_type(),
         ExtendedColorType::Cmyk8 | ExtendedColorType::Cmyk16
     ) {
-        return Err(CMYK_ERROR.to_string());
+        return Err(Msg::new(CMYK_ERROR));
     }
     if matches!(decoder.color_type(), ColorType::Rgb32F | ColorType::Rgba32F) {
-        return Err(FLOAT_ERROR.to_string());
+        return Err(Msg::new(FLOAT_ERROR));
     }
     let mut meta = if format == Some(ImageFormat::Tiff) {
         tiff_metadata(src, keep_metadata)?
@@ -184,9 +185,9 @@ pub fn from_png(
     dst: &Path,
     format: OutputFormat,
     keep_metadata: bool,
-) -> Result<MetaTransfer, String> {
+) -> Result<MetaTransfer, Msg> {
     if !matches!(format, OutputFormat::Tiff | OutputFormat::Webp) {
-        return Err(FORMAT_ERROR.to_string());
+        return Err(Msg::new(FORMAT_ERROR));
     }
     let found = scan_png(src_png)?;
     let mut decoder = decoder_for(open_reader(src_png)?)?;
@@ -216,20 +217,20 @@ pub fn from_png(
 /// a `zTXt` chunk with the first of those keywords, never as `eXIf`).
 /// Everything else, the ICC profile included, is copied byte for byte. A PNG
 /// without such chunks is not touched.
-pub fn strip_png_metadata(path: &Path) -> Result<(), String> {
-    let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
-    let found = scan(&mut input).map_err(|_| READ_ERROR.to_string())?;
+pub fn strip_png_metadata(path: &Path) -> Result<(), Msg> {
+    let mut input = BufReader::new(File::open(path).map_err(|_| Msg::new(OPEN_ERROR))?);
+    let found = scan(&mut input).map_err(|_| Msg::new(READ_ERROR))?;
     if !found.exif && !found.xmp {
         return Ok(());
     }
 
-    input.rewind().map_err(|_| EDIT_ERROR.to_string())?;
+    input.rewind().map_err(|_| Msg::new(EDIT_ERROR))?;
     // `input` moves into the closure and is closed before the rename
     // (Windows cannot replace a file that is still open).
     replace_file(path, move |out| {
         copy_without_metadata(&mut input, out).map_err(|e| match e.kind() {
-            io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData => READ_ERROR.to_string(),
-            _ => EDIT_ERROR.to_string(),
+            io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData => Msg::new(READ_ERROR),
+            _ => Msg::new(EDIT_ERROR),
         })
     })
 }
@@ -238,29 +239,29 @@ pub fn strip_png_metadata(path: &Path) -> Result<(), String> {
 /// (Photoshop/IPTC). Every other segment and the image data after the first
 /// SOS marker are copied byte for byte. A JPEG without such segments is not
 /// touched.
-pub fn strip_jpeg_metadata(path: &Path) -> Result<(), String> {
-    let bytes = fs::read(path).map_err(|_| OPEN_ERROR.to_string())?;
-    let kept = jpeg_without_metadata(&bytes).ok_or_else(|| READ_ERROR.to_string())?;
+pub fn strip_jpeg_metadata(path: &Path) -> Result<(), Msg> {
+    let bytes = fs::read(path).map_err(|_| Msg::new(OPEN_ERROR))?;
+    let kept = jpeg_without_metadata(&bytes).ok_or_else(|| Msg::new(READ_ERROR))?;
     if kept.len() == bytes.len() {
         return Ok(());
     }
     replace_file(path, |out| {
-        out.write_all(&kept).map_err(|_| WRITE_ERROR.to_string())
+        out.write_all(&kept).map_err(|_| Msg::new(WRITE_ERROR))
     })
 }
 
 /// Writes a sibling `.strip.tmp` with `write` and renames it over `path`.
 fn replace_file(
     path: &Path,
-    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>,
-) -> Result<(), String> {
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), Msg>,
+) -> Result<(), Msg> {
     let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
     tmp_name.push(".strip.tmp");
     let tmp = path.with_file_name(tmp_name);
     write_file(&tmp, write)?;
     fs::rename(&tmp, path).map_err(|_| {
         let _ = fs::remove_file(&tmp);
-        EDIT_ERROR.to_string()
+        Msg::new(EDIT_ERROR)
     })
 }
 
@@ -316,10 +317,10 @@ fn jpeg_without_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
 
 // ------------------------------------------------------------------ reading
 
-fn open_reader(path: &Path) -> Result<ImageReader<BufReader<File>>, String> {
+fn open_reader(path: &Path) -> Result<ImageReader<BufReader<File>>, Msg> {
     let mut reader = ImageReader::open(path)
         .and_then(ImageReader::with_guessed_format)
-        .map_err(|_| OPEN_ERROR.to_string())?;
+        .map_err(|_| Msg::new(OPEN_ERROR))?;
     let mut limits = Limits::default();
     limits.max_alloc = Some(MAX_DECODED_BYTES);
     reader.limits(limits);
@@ -329,20 +330,19 @@ fn open_reader(path: &Path) -> Result<ImageReader<BufReader<File>>, String> {
 /// The decoder for `reader`, refused if the decoded image would be bigger than
 /// `MAX_DECODED_BYTES`. `ImageReader::decode` makes that check on its own,
 /// `into_decoder` followed by `DynamicImage::from_decoder` does not.
-fn decoder_for(reader: ImageReader<BufReader<File>>) -> Result<impl ImageDecoder, String> {
+fn decoder_for(reader: ImageReader<BufReader<File>>) -> Result<impl ImageDecoder, Msg> {
     let decoder = reader.into_decoder().map_err(|e| image_error(&e))?;
     if decoder.total_bytes() > MAX_DECODED_BYTES {
-        return Err(TOO_BIG_ERROR.to_string());
+        return Err(Msg::new(TOO_BIG_ERROR));
     }
     Ok(decoder)
 }
 
-fn image_error(error: &ImageError) -> String {
-    match error {
+fn image_error(error: &ImageError) -> Msg {
+    Msg::new(match error {
         ImageError::Limits(_) => TOO_BIG_ERROR,
         _ => READ_ERROR,
-    }
-    .to_string()
+    })
 }
 
 /// What a source file says about its metadata.
@@ -375,7 +375,7 @@ fn tiff_block(exif: Vec<u8>) -> Vec<u8> {
 fn decoder_metadata(
     decoder: &mut impl ImageDecoder,
     keep_metadata: bool,
-) -> Result<SourceMeta, String> {
+) -> Result<SourceMeta, Msg> {
     let icc = decoder.icc_profile().map_err(|e| image_error(&e))?;
     let mut meta = SourceMeta {
         icc: non_empty(icc),
@@ -447,14 +447,14 @@ const COLOUR_TAGS: [u16; 3] = [301, 318, 319];
 /// profile, an orientation of 1 ("upright", the default) and the colour tags
 /// counts as descriptive metadata, which is then uncarried. The colour tags make
 /// the colour profile uncarried whatever `keep_metadata` says.
-fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String> {
-    let file = File::open(path).map_err(|_| OPEN_ERROR.to_string())?;
+fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, Msg> {
+    let file = File::open(path).map_err(|_| Msg::new(OPEN_ERROR))?;
     let mut decoder =
-        tiff::decoder::Decoder::new(BufReader::new(file)).map_err(|_| READ_ERROR.to_string())?;
+        tiff::decoder::Decoder::new(BufReader::new(file)).map_err(|_| Msg::new(READ_ERROR))?;
     let icc = match decoder.find_tag(Tag::IccProfile) {
         Ok(None) => None,
-        Ok(Some(profile)) => Some(profile.into_u8_vec().map_err(|_| READ_ERROR.to_string())?),
-        Err(_) => return Err(READ_ERROR.to_string()),
+        Ok(Some(profile)) => Some(profile.into_u8_vec().map_err(|_| Msg::new(READ_ERROR))?),
+        Err(_) => return Err(Msg::new(READ_ERROR)),
     };
     let mut meta = SourceMeta {
         icc: non_empty(icc),
@@ -490,7 +490,7 @@ fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String>
 /// `true` if a BMP names a colour profile, embedded or linked. Only the
 /// `BITMAPV5HEADER` (124 bytes) has the colour space type (`bV5CSType`) that
 /// can say so; the image crate does not read the profile, so it is lost.
-fn bmp_has_profile(path: &Path) -> Result<bool, String> {
+fn bmp_has_profile(path: &Path) -> Result<bool, Msg> {
     const FILE_HEADER_LEN: usize = 14;
     const V5_HEADER_LEN: u32 = 124;
     const CS_TYPE_AT: usize = FILE_HEADER_LEN + 56;
@@ -499,10 +499,10 @@ fn bmp_has_profile(path: &Path) -> Result<bool, String> {
 
     let mut head = Vec::new();
     File::open(path)
-        .map_err(|_| OPEN_ERROR.to_string())?
+        .map_err(|_| Msg::new(OPEN_ERROR))?
         .take(CS_TYPE_AT as u64 + 4)
         .read_to_end(&mut head)
-        .map_err(|_| READ_ERROR.to_string())?;
+        .map_err(|_| Msg::new(READ_ERROR))?;
     let word = |at: usize| {
         head.get(at..at + 4)
             .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
@@ -517,14 +517,14 @@ fn bmp_has_profile(path: &Path) -> Result<bool, String> {
 }
 
 /// `true` if a WebP is an animation with more than one frame (`ANMF` chunk).
-fn webp_has_more_frames(path: &Path) -> Result<bool, String> {
-    let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
+fn webp_has_more_frames(path: &Path) -> Result<bool, Msg> {
+    let mut input = BufReader::new(File::open(path).map_err(|_| Msg::new(OPEN_ERROR))?);
     let mut riff = [0u8; 12];
     input
         .read_exact(&mut riff)
-        .map_err(|_| READ_ERROR.to_string())?;
+        .map_err(|_| Msg::new(READ_ERROR))?;
     if &riff[..4] != b"RIFF" || &riff[8..] != b"WEBP" {
-        return Err(READ_ERROR.to_string());
+        return Err(Msg::new(READ_ERROR));
     }
     let mut frames = 0;
     loop {
@@ -532,7 +532,7 @@ fn webp_has_more_frames(path: &Path) -> Result<bool, String> {
         match input.read_exact(&mut header) {
             Ok(()) => {}
             Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
-            Err(_) => return Err(READ_ERROR.to_string()),
+            Err(_) => return Err(Msg::new(READ_ERROR)),
         }
         if &header[..4] == b"ANMF" {
             frames += 1;
@@ -544,7 +544,7 @@ fn webp_has_more_frames(path: &Path) -> Result<bool, String> {
         let size = i64::from(u32::from_le_bytes(header[4..].try_into().unwrap()));
         input
             .seek_relative(size + (size & 1))
-            .map_err(|_| READ_ERROR.to_string())?;
+            .map_err(|_| Msg::new(READ_ERROR))?;
     }
 }
 
@@ -554,10 +554,10 @@ fn webp_has_more_frames(path: &Path) -> Result<bool, String> {
 /// the half-written file is removed again.
 fn write_file(
     dst: &Path,
-    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>,
-) -> Result<(), String> {
-    let mut out = BufWriter::new(File::create(dst).map_err(|_| WRITE_ERROR.to_string())?);
-    let result = write(&mut out).and_then(|()| out.flush().map_err(|_| WRITE_ERROR.to_string()));
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), Msg>,
+) -> Result<(), Msg> {
+    let mut out = BufWriter::new(File::create(dst).map_err(|_| Msg::new(WRITE_ERROR))?);
+    let result = write(&mut out).and_then(|()| out.flush().map_err(|_| Msg::new(WRITE_ERROR)));
     drop(out);
     if result.is_err() {
         let _ = fs::remove_file(dst);
@@ -571,7 +571,7 @@ fn write_png(
     dst: &Path,
     icc: Option<Vec<u8>>,
     exif: Option<Vec<u8>>,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     write_file(dst, |out| {
         // A temporary file for cjxl: fast to write matters more than small.
         let mut encoder =
@@ -579,21 +579,21 @@ fn write_png(
         if let Some(icc) = icc {
             encoder
                 .set_icc_profile(icc)
-                .map_err(|_| WRITE_ERROR.to_string())?;
+                .map_err(|_| Msg::new(WRITE_ERROR))?;
         }
         if let Some(exif) = exif {
             encoder
                 .set_exif_metadata(exif)
-                .map_err(|_| WRITE_ERROR.to_string())?;
+                .map_err(|_| Msg::new(WRITE_ERROR))?;
         }
         image
             .write_with_encoder(encoder)
-            .map_err(|_| WRITE_ERROR.to_string())
+            .map_err(|_| Msg::new(WRITE_ERROR))
     })
 }
 
 /// Writes a lossless TIFF. Returns whether the ICC profile went into it.
-fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<bool, String> {
+fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<bool, Msg> {
     // The TIFF encoder has no gray + alpha, so that becomes RGBA. A profile for
     // gray data does not fit RGB data, so it is not written then.
     let (image, icc) = match image.color() {
@@ -607,21 +607,19 @@ fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<b
         if let Some(icc) = icc {
             encoder
                 .set_icc_profile(icc)
-                .map_err(|_| WRITE_ERROR.to_string())?;
+                .map_err(|_| Msg::new(WRITE_ERROR))?;
         }
         image
             .write_with_encoder(encoder)
-            .map_err(|_| WRITE_ERROR.to_string())
+            .map_err(|_| Msg::new(WRITE_ERROR))
     })?;
     Ok(carried)
 }
 
-fn write_webp(image: DynamicImage, dst: &Path) -> Result<(), String> {
+fn write_webp(image: DynamicImage, dst: &Path) -> Result<(), Msg> {
     let (width, height) = (image.width(), image.height());
     if width > WEBP_MAX_SIDE || height > WEBP_MAX_SIDE {
-        return Err(format!(
-            "Bild ist für WebP zu groß (höchstens {WEBP_MAX_SIDE} Pixel pro Seite)"
-        ));
+        return Err(Msg::new(keys::WEBP_TOO_LARGE).with("max", WEBP_MAX_SIDE.to_string()));
     }
     // WebP is 8 bit, with or without alpha.
     let (rgb, rgba);
@@ -634,9 +632,9 @@ fn write_webp(image: DynamicImage, dst: &Path) -> Result<(), String> {
     };
     let data = encoder
         .encode_simple(false, WEBP_QUALITY)
-        .map_err(|_| "WebP-Kodierung fehlgeschlagen".to_string())?;
+        .map_err(|_| Msg::new(keys::WEBP_ENCODE))?;
     write_file(dst, |out| {
-        out.write_all(&data).map_err(|_| WRITE_ERROR.to_string())
+        out.write_all(&data).map_err(|_| Msg::new(WRITE_ERROR))
     })
 }
 
@@ -738,10 +736,10 @@ fn read_signature(input: &mut impl Read) -> io::Result<()> {
     }
 }
 
-/// Reads the chunk list of a PNG (not the image data). German error texts.
-pub fn scan_png(path: &Path) -> Result<PngMeta, String> {
-    let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
-    scan(&mut input).map_err(|_| READ_ERROR.to_string())
+/// Reads the chunk list of a PNG (not the image data).
+pub fn scan_png(path: &Path) -> Result<PngMeta, Msg> {
+    let mut input = BufReader::new(File::open(path).map_err(|_| Msg::new(OPEN_ERROR))?);
+    scan(&mut input).map_err(|_| Msg::new(READ_ERROR))
 }
 
 /// Walks the chunks up to `IEND`, skipping over the data.

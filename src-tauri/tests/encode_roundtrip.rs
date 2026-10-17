@@ -10,11 +10,12 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, SystemTime};
 
-use common::{FIXTURE_H, FIXTURE_W, JpegOpts, PngKind};
+use common::{FIXTURE_H, FIXTURE_W, JpegOpts, PngKind, keys_of};
 use image::Frame;
 use image::codecs::gif::{GifEncoder, Repeat};
 use jpeg_xl_konverter_lib::engine::args::{DjxlTarget, djxl_args};
 use jpeg_xl_konverter_lib::engine::encode::{Ctx, encode_one};
+use jpeg_xl_konverter_lib::engine::msg::keys;
 use jpeg_xl_konverter_lib::engine::originals::{Availability, FakeRecycleBin};
 use jpeg_xl_konverter_lib::engine::scan::scan_paths;
 use jpeg_xl_konverter_lib::engine::targets::{target_path, tmp_path};
@@ -28,9 +29,6 @@ use tempfile::TempDir;
 use tiff::encoder::{TiffEncoder as RawTiffEncoder, colortype};
 
 const MARKER: &str = "TESTMARKER";
-const NOTE_METADATA: &str = "Metadaten nicht vollständig übernommen";
-const NOTE_FIRST_PAGE: &str = "Nur die erste Seite übernommen – Original behalten";
-const NOTE_ANIMATION: &str = "Animation – Original behalten";
 
 // ---------------------------------------------------------------- harness
 
@@ -140,7 +138,7 @@ fn lossless() -> JobSettings {
 
 fn assert_done(outcome: &Outcome, target: &Path) {
     assert_eq!(outcome.status, ItemStatus::Done, "{outcome:?}");
-    assert_eq!(outcome.note, None);
+    assert!(outcome.notes.is_empty(), "{outcome:?}");
     assert_eq!(outcome.out_path.as_deref(), Some(target));
     assert_eq!(outcome.out_size, Some(fs::metadata(target).unwrap().len()));
 }
@@ -225,10 +223,7 @@ fn cmyk_jpeg_skipped() {
     );
     let (outcome, target) = env.encode(&src, &lossless());
     assert_eq!(outcome.status, ItemStatus::Skipped, "{outcome:?}");
-    assert_eq!(
-        outcome.note.as_deref(),
-        Some("JPEG lässt sich nicht verlustfrei umpacken")
-    );
+    assert_eq!(keys_of(&outcome.notes), [keys::NOT_TRANSCODABLE]);
     assert!(!target.exists());
 }
 
@@ -240,7 +235,7 @@ fn corrupt_file_errors() {
     fs::write(&src, &garbage).unwrap();
     let (outcome, target) = env.encode(&src, &lossless());
     assert_eq!(outcome.status, ItemStatus::Error, "{outcome:?}");
-    assert!(outcome.note.is_some());
+    assert!(!outcome.notes.is_empty());
     assert!(!target.exists());
     assert_eq!(fs::read(&src).unwrap(), garbage);
 }
@@ -335,7 +330,7 @@ fn animated_gif_is_never_trashed() {
     common::write_animated_gif(&src, 2);
     let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-    assert_eq!(outcome.note.as_deref(), Some(NOTE_ANIMATION));
+    assert_eq!(keys_of(&outcome.notes), [keys::ANIMATION_KEPT_ORIGINAL]);
     assert!(target.is_file());
     assert!(env.recycled().is_empty());
     assert!(src.is_file());
@@ -353,7 +348,7 @@ fn multi_page_tiff_keeps_original() {
     write_tiff_pages(&src, 2);
     let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-    assert_eq!(outcome.note.as_deref(), Some(NOTE_FIRST_PAGE));
+    assert_eq!(keys_of(&outcome.notes), [keys::FIRST_PAGE_ONLY]);
     assert!(target.is_file());
     assert!(env.recycled().is_empty());
 }
@@ -365,7 +360,7 @@ fn png_text_chunk_keeps_original() {
     common::write_png_with(&src, &[(b"tEXt", b"Title\0Urlaub".to_vec())]);
     let (outcome, target) = env.encode(&src, &settings(0.0, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-    assert_eq!(outcome.note.as_deref(), Some(NOTE_METADATA));
+    assert_eq!(keys_of(&outcome.notes), [keys::METADATA_INCOMPLETE]);
     assert!(target.is_file());
     assert!(env.recycled().is_empty());
 }
@@ -411,7 +406,7 @@ fn gif_comment_keeps_original() {
     fs::write(&src, bytes).unwrap();
     let (outcome, _) = env.encode(&src, &settings(0.0, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-    assert_eq!(outcome.note.as_deref(), Some(NOTE_METADATA));
+    assert_eq!(keys_of(&outcome.notes), [keys::METADATA_INCOMPLETE]);
     assert!(env.recycled().is_empty());
 }
 
@@ -438,7 +433,7 @@ fn existing_target_skipped() {
     fs::write(&target, b"schon da").unwrap();
     let (outcome, _) = env.encode(&src, &lossless());
     assert_eq!(outcome.status, ItemStatus::Skipped, "{outcome:?}");
-    assert_eq!(outcome.note.as_deref(), Some("Zieldatei existiert bereits"));
+    assert_eq!(keys_of(&outcome.notes), [keys::TARGET_EXISTS]);
     assert_eq!(fs::read(&target).unwrap(), b"schon da");
 }
 
@@ -607,10 +602,7 @@ fn recycle_bin_note_is_passed_on() {
     common::write_png(&src, PngKind::Rgb8);
     let (outcome, _) = env.encode(&src, &settings(0.0, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-    assert_eq!(
-        outcome.note.as_deref(),
-        Some("Original behalten: kein Papierkorb auf diesem Laufwerk")
-    );
+    assert_eq!(keys_of(&outcome.notes), [keys::KEPT_NO_RECYCLE_BIN]);
 }
 
 #[test]
@@ -629,7 +621,7 @@ fn cancelled_run_waits_and_cleans_up() {
             }
         });
         assert_eq!(outcome.status, ItemStatus::Waiting, "{at}: {outcome:?}");
-        assert_eq!(outcome.note, None);
+        assert!(outcome.notes.is_empty(), "{at}: {outcome:?}");
         assert!(!target.exists(), "{at}");
         assert!(env.recycled().is_empty());
     }

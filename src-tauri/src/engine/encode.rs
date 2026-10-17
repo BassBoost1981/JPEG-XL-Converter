@@ -17,20 +17,16 @@ use image::ImageFormat;
 use super::args::{DjxlTarget, cjxl_args};
 use super::convert_io::{MetaState, MetaTransfer, PngMeta, scan_png, to_png};
 use super::jxl_container::has_jpeg_reconstruction;
+use super::msg::{Msg, keys};
 use super::originals::{TrashContext, copy_file_times, handle_original};
 pub use super::pipeline_util::Ctx;
 use super::pipeline_util::{
-    NOTE_DATES, NOTE_METADATA, Scratch, Stop, check_cancel, check_target, finished, load,
-    open_reason, pixels_equal, place, prepare, run_djxl,
+    Scratch, Stop, check_cancel, check_target, finished, load, open_reason, pixels_equal, place,
+    prepare, run_djxl,
 };
 use super::tools::ToolError;
 use super::types::{InputKind, Outcome, ScanEntry};
 use super::verify::{dims_match, files_identical, image_dims};
-
-const NOT_TRANSCODABLE: &str = "JPEG lässt sich nicht verlustfrei umpacken";
-const NOTE_FIRST_PAGE: &str = "Nur die erste Seite übernommen – Original behalten";
-const NOTE_ANIMATION: &str = "Animation – Original behalten";
-const READ_ERROR: &str = "Bild lässt sich nicht lesen";
 
 /// Converts `entry` to `target` (which must not exist yet).
 /// Progress: 5 at the start, 60 after converting, 90 after the check, 100 done.
@@ -78,12 +74,12 @@ fn run(
         Err(ToolError {
             cancelled: true, ..
         }) => return Err(Stop::Cancelled),
-        Err(_) if transcode => return Err(Stop::Skipped(NOT_TRANSCODABLE)),
-        Err(_) => return Err(Stop::error("Umwandlung nach JPEG XL fehlgeschlagen")),
+        Err(_) if transcode => return Err(Stop::skipped(keys::NOT_TRANSCODABLE)),
+        Err(_) => return Err(Stop::error(keys::ENCODE_FAILED)),
     }
     // A cheap first look; the byte-exact restore below is the real proof.
     if transcode && !has_jpeg_reconstruction(&tmp).unwrap_or(false) {
-        return Err(Stop::Skipped(NOT_TRANSCODABLE));
+        return Err(Stop::skipped(keys::NOT_TRANSCODABLE));
     }
     (ctx.progress)(60);
     check_cancel(ctx)?;
@@ -94,18 +90,15 @@ fn run(
     let mut decoded_metadata_lost = false;
     if transcode {
         let restored = scratch.add(work_file("pruefung.jpg"));
-        let failed = "JPEG lässt sich nicht wiederherstellen";
         run_djxl(
             ctx,
             &tmp,
             &restored,
             DjxlTarget::ReconstructJpeg,
-            Stop::VerifyFailed(failed),
+            Stop::verify_failed(keys::JPEG_RESTORE_FAILED),
         )?;
         if !files_identical(source, &restored).unwrap_or(false) {
-            return Err(Stop::VerifyFailed(
-                "Wiederhergestelltes JPEG weicht vom Original ab",
-            ));
+            return Err(Stop::verify_failed(keys::JPEG_DIFFERS));
         }
     } else {
         let decoded = scratch.add(work_file("pruefung.png"));
@@ -117,7 +110,7 @@ fn run(
             &tmp,
             &decoded,
             to_png,
-            Stop::VerifyFailed("JPEG XL lässt sich nicht dekodieren"),
+            Stop::verify_failed(keys::JXL_DECODE_FAILED),
         )?;
         if lossless {
             check_pixels(&input, &decoded, keep_metadata)?;
@@ -150,18 +143,18 @@ fn run(
                     && !decoded_metadata_lost
                     && transfer.is_none_or(|t| t.complete()))),
     };
-    let mut notes: Vec<String> = Vec::new();
+    let mut notes: Vec<Msg> = Vec::new();
     if pages_lost {
-        notes.push(NOTE_FIRST_PAGE.to_string());
+        notes.push(Msg::new(keys::FIRST_PAGE_ONLY));
     }
     if metadata_lost {
-        notes.push(NOTE_METADATA.to_string());
+        notes.push(Msg::new(keys::METADATA_INCOMPLETE));
     }
     if !dates_copied {
-        notes.push(NOTE_DATES.to_string());
+        notes.push(Msg::new(keys::DATES_NOT_KEPT));
     }
     if facts.animated && settings.trash_originals {
-        notes.push(NOTE_ANIMATION.to_string());
+        notes.push(Msg::new(keys::ANIMATION_KEPT_ORIGINAL));
     }
     notes.extend(handle_original(&trash, source, ctx.bin));
     (ctx.progress)(100);
@@ -178,7 +171,7 @@ fn check_source(path: &Path, kind: InputKind) -> Result<(), Stop> {
         InputKind::Png => ImageFormat::Png,
         InputKind::Gif => ImageFormat::Gif,
         InputKind::Tiff | InputKind::Webp | InputKind::Bmp => return Ok(()),
-        InputKind::Jxl => return Err(Stop::error("Format wird hier nicht unterstützt")),
+        InputKind::Jxl => return Err(Stop::error(keys::FORMAT_UNSUPPORTED)),
     };
     let mut head = Vec::new();
     file.take(16)
@@ -186,8 +179,8 @@ fn check_source(path: &Path, kind: InputKind) -> Result<(), Stop> {
         .map_err(|e| Stop::error(open_reason(&e)))?;
     match image::guess_format(&head) {
         Ok(found) if found == expected => Ok(()),
-        Ok(_) => Err(Stop::error("Inhalt passt nicht zur Dateiendung")),
-        Err(_) => Err(Stop::error(READ_ERROR)),
+        Ok(_) => Err(Stop::error(keys::CONTENT_MISMATCH)),
+        Err(_) => Err(Stop::error(keys::CANNOT_READ)),
     }
 }
 
@@ -196,28 +189,28 @@ fn check_source(path: &Path, kind: InputKind) -> Result<(), Stop> {
 /// accordingly; with metadata off (`-x strip=exif`) the orientation is dropped
 /// and the pixels come back as stored (docs/libjxl-notes.md).
 fn check_pixels(input: &Path, decoded: &Path, keep_metadata: bool) -> Result<(), Stop> {
-    const FAILED: &str = "Pixelvergleich nicht möglich";
-    let (mut expected, orientation) = load(input).map_err(|_| Stop::VerifyFailed(FAILED))?;
-    let (actual, _) = load(decoded).map_err(|_| Stop::VerifyFailed(FAILED))?;
+    const FAILED: &str = keys::PIXEL_COMPARE_FAILED;
+    let (mut expected, orientation) = load(input).map_err(|_| Stop::verify_failed(FAILED))?;
+    let (actual, _) = load(decoded).map_err(|_| Stop::verify_failed(FAILED))?;
     if keep_metadata {
         expected.apply_orientation(orientation);
     }
     if pixels_equal(&expected, &actual) {
         Ok(())
     } else {
-        Err(Stop::VerifyFailed("Pixel weichen vom Original ab"))
+        Err(Stop::verify_failed(keys::PIXELS_DIFFER))
     }
 }
 
 /// Lossy: the decoded JXL has the size of the input (possibly turned).
 fn check_dims(input: &Path, decoded: &Path) -> Result<(), Stop> {
-    const FAILED: &str = "Abmessungen lassen sich nicht prüfen";
-    let expected = image_dims(input).map_err(|_| Stop::VerifyFailed(FAILED))?;
-    let actual = image_dims(decoded).map_err(|_| Stop::VerifyFailed(FAILED))?;
+    const FAILED: &str = keys::DIMS_CHECK_FAILED;
+    let expected = image_dims(input).map_err(|_| Stop::verify_failed(FAILED))?;
+    let actual = image_dims(decoded).map_err(|_| Stop::verify_failed(FAILED))?;
     if dims_match(expected, actual) {
         Ok(())
     } else {
-        Err(Stop::VerifyFailed("Abmessungen stimmen nicht"))
+        Err(Stop::verify_failed(keys::DIMS_MISMATCH))
     }
 }
 
@@ -243,7 +236,7 @@ impl SourceFacts {
                 }
             }
             InputKind::Gif => {
-                let gif = scan_gif(input).map_err(|_| Stop::error(READ_ERROR))?;
+                let gif = scan_gif(input).map_err(|_| Stop::error(keys::CANNOT_READ))?;
                 SourceFacts {
                     animated: gif.frames > 1,
                     png: None,
@@ -267,8 +260,7 @@ impl SourceFacts {
         let Some(src) = self.png else {
             return Ok(self.uncarried);
         };
-        let out = scan_png(decoded)
-            .map_err(|_| Stop::VerifyFailed("Metadaten lassen sich nicht prüfen"))?;
+        let out = scan_png(decoded).map_err(|_| Stop::verify_failed(keys::META_CHECK_FAILED))?;
         Ok(self.uncarried || (src.exif && !out.exif) || (src.xmp && !out.xmp))
     }
 }

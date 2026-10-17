@@ -6,16 +6,21 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use super::i18n;
+use super::msg::Msg;
 use super::types::{
-    ItemStatus, JobSettings, Mode, Outcome, OutputFormat, OutputLocation, RunSummary,
+    ItemStatus, JobSettings, Lang, Mode, Outcome, OutputFormat, OutputLocation, RunSummary,
 };
+
+/// Joins the notes of one file in the log.
+const NOTE_SEPARATOR: &str = " · ";
 
 pub struct RunReport {
     mode: Mode,
     settings: JobSettings,
     summary: RunSummary,
-    /// Files that need attention: status, path, reason.
-    problems: Vec<(ItemStatus, PathBuf, String)>,
+    /// Files that need attention: status, path, notes.
+    problems: Vec<(ItemStatus, PathBuf, Vec<Msg>)>,
 }
 
 impl RunReport {
@@ -50,8 +55,8 @@ impl RunReport {
             ItemStatus::Error | ItemStatus::VerifyFailed => s.errors += 1,
         }
         if o.status != ItemStatus::Done {
-            let reason = o.note.clone().unwrap_or_default();
-            self.problems.push((o.status, path.to_path_buf(), reason));
+            self.problems
+                .push((o.status, path.to_path_buf(), o.notes.clone()));
         }
     }
 
@@ -91,7 +96,13 @@ impl RunReport {
             "Summe: {} fertig, {} übersprungen, {} Fehler, {} Bytes → {} Bytes\r\n\r\n",
             s.done, s.skipped, s.errors, s.bytes_in, s.bytes_out
         );
-        for (status, path, reason) in &self.problems {
+        for (status, path, notes) in &self.problems {
+            // German until the log follows the app language.
+            let reason = notes
+                .iter()
+                .map(|note| i18n::text(Lang::De, note))
+                .collect::<Vec<_>>()
+                .join(NOTE_SEPARATOR);
             let _ = write!(
                 text,
                 "{}\t{}\t{reason}\r\n",
@@ -154,6 +165,7 @@ fn status_word(status: ItemStatus) -> &'static str {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use crate::engine::msg::keys;
     use crate::engine::types::{DecodeSettings, EncodeSettings};
 
     fn settings() -> JobSettings {
@@ -174,12 +186,13 @@ pub(crate) mod tests {
         }
     }
 
-    fn outcome(status: ItemStatus, out_size: Option<u64>, note: Option<&str>) -> Outcome {
+    /// An outcome whose notes are the messages of `notes` (keys without parameters).
+    fn outcome(status: ItemStatus, out_size: Option<u64>, notes: &[&str]) -> Outcome {
         Outcome {
             status,
             out_path: None,
             out_size,
-            note: note.map(str::to_string),
+            notes: notes.iter().map(|key| Msg::new(key)).collect(),
         }
     }
 
@@ -189,32 +202,36 @@ pub(crate) mod tests {
         report.add(
             Path::new("a.jpg"),
             100,
-            &outcome(ItemStatus::Done, Some(40), None),
+            &outcome(ItemStatus::Done, Some(40), &[]),
         );
         report.add(
             Path::new("b.jpg"),
             200,
-            &outcome(ItemStatus::DoneWithNote, Some(50), Some("Hinweis")),
+            &outcome(
+                ItemStatus::DoneWithNote,
+                Some(50),
+                &[keys::METADATA_INCOMPLETE],
+            ),
         );
         report.add(
             Path::new("c.jpg"),
             300,
-            &outcome(ItemStatus::Skipped, None, Some("x")),
+            &outcome(ItemStatus::Skipped, None, &[keys::TARGET_EXISTS]),
         );
         report.add(
             Path::new("d.jpg"),
             400,
-            &outcome(ItemStatus::Error, None, Some("y")),
+            &outcome(ItemStatus::Error, None, &[keys::CANNOT_READ]),
         );
         report.add(
             Path::new("e.jpg"),
             500,
-            &outcome(ItemStatus::VerifyFailed, None, Some("z")),
+            &outcome(ItemStatus::VerifyFailed, None, &[keys::PIXELS_DIFFER]),
         );
         report.add(
             Path::new("f.jpg"),
             600,
-            &outcome(ItemStatus::Waiting, None, None),
+            &outcome(ItemStatus::Waiting, None, &[]),
         );
         assert_eq!(
             report.summary(),
@@ -235,7 +252,7 @@ pub(crate) mod tests {
         report.add(
             Path::new("a.jpg"),
             100,
-            &outcome(ItemStatus::Done, Some(40), None),
+            &outcome(ItemStatus::Done, Some(40), &[]),
         );
         assert!(!report.has_problems());
         report.add(
@@ -244,7 +261,7 @@ pub(crate) mod tests {
             &outcome(
                 ItemStatus::DoneWithNote,
                 Some(40),
-                Some("Original behalten: kein Papierkorb"),
+                &[keys::KEPT_NO_RECYCLE_BIN],
             ),
         );
         assert!(report.has_problems());
@@ -257,30 +274,22 @@ pub(crate) mod tests {
         report.add(
             Path::new("a.jxl"),
             100,
-            &outcome(ItemStatus::Done, Some(400), None),
+            &outcome(ItemStatus::Done, Some(400), &[]),
         );
         report.add(
             Path::new(r"D:\Bilder\b.jxl"),
             100,
-            &outcome(
-                ItemStatus::Error,
-                None,
-                Some("JPEG XL lässt sich nicht lesen"),
-            ),
+            &outcome(ItemStatus::Error, None, &[keys::JXL_UNREADABLE]),
         );
         report.add(
             Path::new(r"D:\Bilder\c.jxl"),
             100,
-            &outcome(
-                ItemStatus::Skipped,
-                None,
-                Some("Zieldatei existiert bereits"),
-            ),
+            &outcome(ItemStatus::Skipped, None, &[keys::TARGET_EXISTS]),
         );
         report.add(
             Path::new(r"D:\Bilder\d.jxl"),
             100,
-            &outcome(ItemStatus::VerifyFailed, None, Some("Pixel weichen ab")),
+            &outcome(ItemStatus::VerifyFailed, None, &[keys::PIXELS_DIFFER]),
         );
         report.add(
             Path::new(r"D:\Bilder\e.jxl"),
@@ -288,7 +297,7 @@ pub(crate) mod tests {
             &outcome(
                 ItemStatus::DoneWithNote,
                 Some(10),
-                Some("Animation – .jxl behalten"),
+                &[keys::ANIMATION_KEPT_JXL],
             ),
         );
         let path = report.write_log(&dir.path().join("Protokolle")).unwrap();
@@ -303,9 +312,49 @@ pub(crate) mod tests {
         );
         assert!(text.contains("Fehler\tD:\\Bilder\\b.jxl\tJPEG XL lässt sich nicht lesen"));
         assert!(text.contains("Übersprungen\tD:\\Bilder\\c.jxl\tZieldatei existiert bereits"));
-        assert!(text.contains("Prüfung fehlgeschlagen\tD:\\Bilder\\d.jxl\tPixel weichen ab"));
+        assert!(
+            text.contains(
+                "Prüfung fehlgeschlagen\tD:\\Bilder\\d.jxl\tPixel weichen vom Original ab"
+            )
+        );
         assert!(text.contains("Fertig mit Hinweis\tD:\\Bilder\\e.jxl\tAnimation – .jxl behalten"));
         assert!(!text.contains("a.jxl"), "{text}");
+    }
+
+    #[test]
+    fn log_joins_notes_and_translates_nested_reasons() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut report = RunReport::new(Mode::Enc, &settings());
+        report.add(
+            Path::new(r"D:\Bilder\a.png"),
+            100,
+            &outcome(
+                ItemStatus::DoneWithNote,
+                Some(10),
+                &[keys::METADATA_INCOMPLETE, keys::DATES_NOT_KEPT],
+            ),
+        );
+        let mut kept = outcome(ItemStatus::DoneWithNote, Some(10), &[]);
+        kept.notes
+            .push(Msg::new(keys::KEPT_RECYCLE_FAILED).with_msg(
+                "reason",
+                Msg::new(keys::WINDOWS_ERROR).with("code", "0x80270058"),
+            ));
+        report.add(Path::new(r"D:\Bilder\b.png"), 100, &kept);
+        let text = fs::read_to_string(report.write_log(dir.path()).unwrap()).unwrap();
+
+        assert!(
+            text.contains(
+                "Fertig mit Hinweis\tD:\\Bilder\\a.png\tMetadaten nicht vollständig übernommen · Dateidatum nicht übernommen\r\n"
+            ),
+            "{text}"
+        );
+        assert!(
+            text.contains(
+                "Fertig mit Hinweis\tD:\\Bilder\\b.png\tOriginal behalten: Papierkorb nicht möglich (Windows-Fehler 0x80270058)\r\n"
+            ),
+            "{text}"
+        );
     }
 
     /// `^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}\.txt$`

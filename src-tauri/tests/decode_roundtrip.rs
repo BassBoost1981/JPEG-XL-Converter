@@ -7,11 +7,12 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use common::{FIXTURE_H, FIXTURE_W, JpegOpts, PngKind};
+use common::{FIXTURE_H, FIXTURE_W, JpegOpts, PngKind, keys_of};
 use image::{ColorType, ImageFormat, ImageReader};
 use jpeg_xl_konverter_lib::engine::args::{DjxlTarget, djxl_args};
 use jpeg_xl_konverter_lib::engine::decode::{decode_ext, decode_one};
 use jpeg_xl_konverter_lib::engine::encode::{Ctx, encode_one};
+use jpeg_xl_konverter_lib::engine::msg::keys;
 use jpeg_xl_konverter_lib::engine::originals::{Availability, FakeRecycleBin};
 use jpeg_xl_konverter_lib::engine::scan::scan_paths;
 use jpeg_xl_konverter_lib::engine::targets::{target_path, tmp_path};
@@ -24,8 +25,6 @@ use jpeg_xl_konverter_lib::engine::verify::same_pixels;
 use tempfile::TempDir;
 
 const MARKER: &str = "TESTMARKER";
-const NOTE_METADATA: &str = "Metadaten nicht vollständig übernommen";
-const NOTE_ANIMATION: &str = "Animation – .jxl behalten";
 
 // ---------------------------------------------------------------- harness
 
@@ -137,7 +136,7 @@ fn settings(format: OutputFormat, keep_metadata: bool, trash_originals: bool) ->
 
 fn assert_done(outcome: &Outcome, target: &Path) {
     assert_eq!(outcome.status, ItemStatus::Done, "{outcome:?}");
-    assert_eq!(outcome.note, None);
+    assert!(outcome.notes.is_empty(), "{outcome:?}");
     assert_eq!(outcome.out_path.as_deref(), Some(target));
     assert_eq!(outcome.out_size, Some(fs::metadata(target).unwrap().len()));
 }
@@ -269,7 +268,7 @@ fn webp_output_notes_lost_exif() {
 
     let (outcome, _) = env.decode(&jxl, &settings(OutputFormat::Webp, true, false));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-    assert_eq!(outcome.note.as_deref(), Some(NOTE_METADATA));
+    assert_eq!(keys_of(&outcome.notes), [keys::METADATA_INCOMPLETE]);
 }
 
 #[test]
@@ -334,7 +333,7 @@ fn animated_jxl_is_kept() {
 
     let (outcome, target) = env.decode(&jxl, &settings(OutputFormat::Png, true, true));
     assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-    assert_eq!(outcome.note.as_deref(), Some(NOTE_ANIMATION));
+    assert_eq!(keys_of(&outcome.notes), [keys::ANIMATION_KEPT_JXL]);
     assert!(target.exists());
     assert!(env.recycled().is_empty());
 
@@ -446,7 +445,6 @@ fn write_float_pfm(path: &Path, w: u32, h: u32) {
 
 #[test]
 fn float_jxl_is_kept() {
-    const NOTE_NOT_EXACT: &str = "Gleitkomma- oder Mehrkanal-Bild – .jxl behalten";
     let env = Env::new();
     let src = env.path("hdr.pfm");
     write_float_pfm(&src, FIXTURE_W, FIXTURE_H);
@@ -455,7 +453,7 @@ fn float_jxl_is_kept() {
     for format in [OutputFormat::Png, OutputFormat::Tiff] {
         let (outcome, target) = env.decode(&jxl, &settings(format, true, true));
         assert_eq!(outcome.status, ItemStatus::DoneWithNote, "{outcome:?}");
-        assert_eq!(outcome.note.as_deref(), Some(NOTE_NOT_EXACT));
+        assert_eq!(keys_of(&outcome.notes), [keys::NOT_EXACT_KEPT_JXL]);
         assert!(target.exists());
         assert!(jxl.exists());
         assert!(env.recycled().is_empty());

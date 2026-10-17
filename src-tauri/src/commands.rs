@@ -1,4 +1,4 @@
-//! Thin Tauri commands: map errors to German strings and call the engine.
+//! Thin Tauri commands: map errors to `Msg` keys and call the engine.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use tauri::async_runtime::spawn_blocking;
 use tauri::{AppHandle, Emitter, State};
 use tauri_plugin_opener::OpenerExt;
 
+use crate::engine::msg::{Msg, keys};
 use crate::engine::originals::WindowsRecycleBin;
 use crate::engine::preview::{make_preview, thumbnail as make_thumbnail};
 use crate::engine::queue::{ProgressSink, Queue, RealProcessor, default_workers};
@@ -22,11 +23,7 @@ use crate::engine::types::{
 };
 use crate::settings_store;
 
-pub const TOOLS_MISSING: &str = "cjxl.exe oder djxl.exe fehlt neben dem Programm.";
 const THUMBNAIL_SIZE: u32 = 80;
-const UNKNOWN_ITEM: &str = "Eintrag nicht gefunden";
-const OUTSIDE_LOG_DIR: &str = "Nur Protokolldateien lassen sich öffnen";
-const INTERNAL: &str = "Interner Fehler";
 
 /// Shared app state, built once at startup.
 pub struct AppState {
@@ -86,12 +83,16 @@ impl AppState {
         &self.work_dir
     }
 
-    fn queue(&self) -> Result<&Queue, String> {
-        self.queue.as_ref().ok_or_else(|| TOOLS_MISSING.to_string())
+    fn queue(&self) -> Result<&Queue, Msg> {
+        self.queue
+            .as_ref()
+            .ok_or_else(|| Msg::new(keys::TOOLS_MISSING))
     }
 
-    fn tools(&self) -> Result<Tools, String> {
-        self.tools.clone().ok_or_else(|| TOOLS_MISSING.to_string())
+    fn tools(&self) -> Result<Tools, Msg> {
+        self.tools
+            .clone()
+            .ok_or_else(|| Msg::new(keys::TOOLS_MISSING))
     }
 }
 
@@ -136,7 +137,7 @@ pub fn check_tools(state: State<'_, AppState>) -> ToolStatus {
             ok: false,
             cjxl_version: None,
             djxl_version: None,
-            message: Some(TOOLS_MISSING.to_string()),
+            messages: vec![Msg::new(keys::TOOLS_MISSING)],
         },
     }
 }
@@ -146,12 +147,12 @@ pub async fn add_paths(
     state: State<'_, AppState>,
     paths: Vec<String>,
     mode: Mode,
-) -> Result<AddResult, String> {
+) -> Result<AddResult, Msg> {
     let queue = state.queue()?;
     let paths: Vec<PathBuf> = paths.into_iter().map(PathBuf::from).collect();
     let scan = spawn_blocking(move || scan_paths(&paths, mode))
         .await
-        .map_err(|_| INTERNAL.to_string())?;
+        .map_err(|_| Msg::new(keys::ERROR_INTERNAL))?;
     Ok(AddResult {
         items: queue.add(mode, scan.entries),
         rejected: scan.rejected,
@@ -159,16 +160,12 @@ pub async fn add_paths(
 }
 
 #[tauri::command]
-pub fn clear_queue(state: State<'_, AppState>, mode: Mode) -> Result<(), String> {
+pub fn clear_queue(state: State<'_, AppState>, mode: Mode) -> Result<(), Msg> {
     state.queue()?.clear(mode)
 }
 
 #[tauri::command]
-pub fn start_run(
-    state: State<'_, AppState>,
-    mode: Mode,
-    settings: JobSettings,
-) -> Result<(), String> {
+pub fn start_run(state: State<'_, AppState>, mode: Mode, settings: JobSettings) -> Result<(), Msg> {
     state.queue()?.start(mode, settings);
     Ok(())
 }
@@ -178,7 +175,7 @@ pub fn retry_failed(
     state: State<'_, AppState>,
     mode: Mode,
     settings: JobSettings,
-) -> Result<(), String> {
+) -> Result<(), Msg> {
     state.queue()?.retry_failed(mode, settings);
     Ok(())
 }
@@ -215,18 +212,18 @@ pub async fn preview(
     settings: JobSettings,
     view_w: u32,
     view_h: u32,
-) -> Result<PreviewDto, String> {
+) -> Result<PreviewDto, Msg> {
     let entry = state
         .queue()?
         .entry(item_id)
-        .ok_or_else(|| UNKNOWN_ITEM.to_string())?;
+        .ok_or_else(|| Msg::new(keys::UNKNOWN_ITEM))?;
     let tools = state.tools()?;
     let work_dir = state.work_dir.clone();
     let p = spawn_blocking(move || {
         make_preview(&entry, mode, &settings, view_w, view_h, &tools, &work_dir)
     })
     .await
-    .map_err(|_| INTERNAL.to_string())??;
+    .map_err(|_| Msg::new(keys::ERROR_INTERNAL))??;
     Ok(PreviewDto {
         before: data_url(&p.before_png),
         after: data_url(&p.after_png),
@@ -235,16 +232,16 @@ pub async fn preview(
 }
 
 #[tauri::command]
-pub async fn thumbnail(state: State<'_, AppState>, item_id: u64) -> Result<String, String> {
+pub async fn thumbnail(state: State<'_, AppState>, item_id: u64) -> Result<String, Msg> {
     let entry = state
         .queue()?
         .entry(item_id)
-        .ok_or_else(|| UNKNOWN_ITEM.to_string())?;
+        .ok_or_else(|| Msg::new(keys::UNKNOWN_ITEM))?;
     let tools = state.tools()?;
     let work_dir = state.work_dir.clone();
     let png = spawn_blocking(move || make_thumbnail(&entry, THUMBNAIL_SIZE, &tools, &work_dir))
         .await
-        .map_err(|_| INTERNAL.to_string())??;
+        .map_err(|_| Msg::new(keys::ERROR_INTERNAL))??;
     Ok(data_url(&png))
 }
 
@@ -254,25 +251,24 @@ pub fn load_settings(state: State<'_, AppState>) -> Option<Value> {
 }
 
 #[tauri::command]
-pub fn save_settings(state: State<'_, AppState>, value: Value) -> Result<(), String> {
-    settings_store::save(&state.config_dir, &value)
-        .map_err(|e| format!("Einstellungen lassen sich nicht speichern: {e}"))
+pub fn save_settings(state: State<'_, AppState>, value: Value) -> Result<(), Msg> {
+    settings_store::save(&state.config_dir, &value).map_err(|_| Msg::new(keys::SAVE_SETTINGS))
 }
 
 /// Opens a file inside the log folder with the default program.
 #[tauri::command]
-pub fn open_log(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), String> {
+pub fn open_log(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), Msg> {
     let dir = state
         .log_dir
         .canonicalize()
-        .map_err(|_| OUTSIDE_LOG_DIR.to_string())?;
+        .map_err(|_| Msg::new(keys::OUTSIDE_LOG_DIR))?;
     let file = PathBuf::from(&path)
         .canonicalize()
-        .map_err(|_| OUTSIDE_LOG_DIR.to_string())?;
+        .map_err(|_| Msg::new(keys::OUTSIDE_LOG_DIR))?;
     if !file.starts_with(&dir) || !file.is_file() {
-        return Err(OUTSIDE_LOG_DIR.to_string());
+        return Err(Msg::new(keys::OUTSIDE_LOG_DIR));
     }
     app.opener()
         .open_path(file.to_string_lossy(), None::<&str>)
-        .map_err(|e| format!("Protokoll lässt sich nicht öffnen: {e}"))
+        .map_err(|_| Msg::new(keys::OPEN_LOG))
 }

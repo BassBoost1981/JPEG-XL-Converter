@@ -35,8 +35,7 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::{HRESULT, HSTRING, PCWSTR, w};
 
-const NOTE_NO_RECYCLE_BIN: &str = "Original behalten: kein Papierkorb auf diesem Laufwerk";
-const NOTE_TOO_LARGE: &str = "Original behalten: zu groß für den Papierkorb";
+use super::msg::{Msg, keys};
 
 /// Per-volume recycle-bin settings of the current user (HKCU).
 const BITBUCKET_VOLUMES: &str =
@@ -77,9 +76,9 @@ pub enum Availability {
 pub trait RecycleBin: Send + Sync {
     /// Checked before every move; `size` is the file size in bytes.
     fn availability(&self, path: &Path, size: u64) -> Availability;
-    /// Moves the file into the recycle bin. `Err` carries a short German
-    /// reason; the file is then expected to be where it was.
-    fn recycle(&self, path: &Path) -> Result<(), String>;
+    /// Moves the file into the recycle bin. `Err` carries the reason (a
+    /// `reason.*` message); the file is then expected to be where it was.
+    fn recycle(&self, path: &Path) -> Result<(), Msg>;
 }
 
 /// The Windows recycle bin, through the shell (`IFileOperation`).
@@ -96,20 +95,20 @@ impl RecycleBin for WindowsRecycleBin {
         }
     }
 
-    fn recycle(&self, path: &Path) -> Result<(), String> {
+    fn recycle(&self, path: &Path) -> Result<(), Msg> {
         // Only a plain file is handed to the shell, never a folder or a link.
         match fs::symlink_metadata(path) {
             Ok(meta) if meta.is_file() => {}
-            Ok(_) => return Err("Keine normale Datei".to_string()),
-            Err(e) => return Err(io_reason(&e).to_string()),
+            Ok(_) => return Err(Msg::new(keys::NOT_REGULAR)),
+            Err(e) => return Err(Msg::new(io_reason(&e))),
         }
         let path = path.to_path_buf();
         // A fresh thread gets its own single-threaded COM apartment.
         thread::Builder::new()
             .spawn(move || recycle_in_sta(&path))
-            .map_err(|_| "Interner Fehler".to_string())?
+            .map_err(|_| Msg::new(keys::REASON_INTERNAL))?
             .join()
-            .unwrap_or_else(|_| Err("Interner Fehler".to_string()))
+            .unwrap_or_else(|_| Err(Msg::new(keys::REASON_INTERNAL)))
     }
 }
 
@@ -126,9 +125,9 @@ impl RecycleBin for FakeRecycleBin {
         self.availability
     }
 
-    fn recycle(&self, path: &Path) -> Result<(), String> {
+    fn recycle(&self, path: &Path) -> Result<(), Msg> {
         if self.fail {
-            return Err("Testfehler".to_string());
+            return Err(Msg::new(keys::REASON_INTERNAL));
         }
         self.recycled.lock().unwrap().push(path.to_path_buf());
         Ok(())
@@ -138,31 +137,25 @@ impl RecycleBin for FakeRecycleBin {
 /// Moves `original` into the recycle bin when the rules allow it. Returns the
 /// note for the queue entry when the original stays although the user wanted
 /// it gone, otherwise `None`.
-pub fn handle_original(
-    ctx: &TrashContext,
-    original: &Path,
-    bin: &dyn RecycleBin,
-) -> Option<String> {
+pub fn handle_original(ctx: &TrashContext, original: &Path, bin: &dyn RecycleBin) -> Option<Msg> {
     if !trash_wanted(ctx) {
         return None;
     }
     let meta = match fs::metadata(original) {
         Ok(meta) => meta,
-        Err(e) => return Some(not_possible(io_reason(&e))),
+        Err(e) => return Some(not_possible(Msg::new(io_reason(&e)))),
     };
     match bin.availability(original, meta.len()) {
         Availability::Available => {}
-        Availability::NoRecycleBin => return Some(NOTE_NO_RECYCLE_BIN.to_string()),
-        Availability::TooLarge => return Some(NOTE_TOO_LARGE.to_string()),
+        Availability::NoRecycleBin => return Some(Msg::new(keys::KEPT_NO_RECYCLE_BIN)),
+        Availability::TooLarge => return Some(Msg::new(keys::KEPT_TOO_LARGE)),
     }
     // Explorer asks before it recycles a read-only file. Nobody is asked
     // here, so a write-protected original simply stays.
     if meta.permissions().readonly() {
-        return Some(not_possible("Datei ist schreibgeschützt"));
+        return Some(not_possible(Msg::new(keys::READ_ONLY)));
     }
-    bin.recycle(original)
-        .err()
-        .map(|reason| not_possible(&reason))
+    bin.recycle(original).err().map(not_possible)
 }
 
 /// Gives `dst` the creation and modification time of `src`, exactly (100 ns).
@@ -178,14 +171,16 @@ pub fn copy_file_times(src: &Path, dst: &Path) -> io::Result<()> {
         .set_times(times)
 }
 
-fn not_possible(reason: &str) -> String {
-    format!("Original behalten: Papierkorb nicht möglich ({reason})")
+/// "Original kept: recycle bin not possible (<reason>)".
+fn not_possible(reason: Msg) -> Msg {
+    Msg::new(keys::KEPT_RECYCLE_FAILED).with_msg("reason", reason)
 }
 
+/// The reason key for a file that cannot be looked at.
 fn io_reason(e: &io::Error) -> &'static str {
     match e.kind() {
-        io::ErrorKind::NotFound => "Datei nicht gefunden",
-        _ => "Datei nicht lesbar",
+        io::ErrorKind::NotFound => keys::NOT_FOUND,
+        _ => keys::UNREADABLE,
     }
 }
 
@@ -324,7 +319,7 @@ fn read_dword(hive: HKEY, key: &HSTRING, value: PCWSTR) -> Result<Option<u32>, (
 
 /// Runs on its own thread: COM in a single-threaded apartment, the shell
 /// operation, then the check that the file really left its place.
-fn recycle_in_sta(path: &Path) -> Result<(), String> {
+fn recycle_in_sta(path: &Path) -> Result<(), Msg> {
     unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }
         .ok()
         .map_err(|e| reason(e.code()))?;
@@ -335,11 +330,11 @@ fn recycle_in_sta(path: &Path) -> Result<(), String> {
     unsafe { CoUninitialize() };
     match aborted {
         Err(code) => Err(reason(code)),
-        Ok(true) => Err("Vorgang abgebrochen".to_string()),
+        Ok(true) => Err(Msg::new(keys::CANCELLED)),
         Ok(false) => match path.try_exists() {
             Ok(false) => Ok(()),
-            Ok(true) => Err("Datei ist noch vorhanden".to_string()),
-            Err(_) => Err("Ergebnis nicht prüfbar".to_string()),
+            Ok(true) => Err(Msg::new(keys::STILL_THERE)),
+            Err(_) => Err(Msg::new(keys::UNVERIFIABLE)),
         },
     }
 }
@@ -366,23 +361,23 @@ fn shell_recycle(path: &Path) -> windows::core::Result<bool> {
     }
 }
 
-/// Short German reason for a failed shell operation.
-fn reason(code: HRESULT) -> String {
+/// The reason for a failed shell operation; an unknown code is shown as hex.
+fn reason(code: HRESULT) -> Msg {
     const SHARING: HRESULT = HRESULT::from_win32(ERROR_SHARING_VIOLATION.0);
     const LOCK: HRESULT = HRESULT::from_win32(ERROR_LOCK_VIOLATION.0);
     const FILE_NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_FILE_NOT_FOUND.0);
     const PATH_NOT_FOUND: HRESULT = HRESULT::from_win32(ERROR_PATH_NOT_FOUND.0);
     const CANCELLED: HRESULT = HRESULT::from_win32(ERROR_CANCELLED.0);
-    let text = match code {
-        E_ACCESSDENIED | COPYENGINE_E_ACCESS_DENIED_SRC => "Zugriff verweigert",
-        SHARING | LOCK | COPYENGINE_E_SHARING_VIOLATION_SRC => {
-            "Datei wird von einem anderen Programm verwendet"
+    let key = match code {
+        E_ACCESSDENIED | COPYENGINE_E_ACCESS_DENIED_SRC => keys::ACCESS_DENIED,
+        SHARING | LOCK | COPYENGINE_E_SHARING_VIOLATION_SRC => keys::IN_USE,
+        FILE_NOT_FOUND | PATH_NOT_FOUND => keys::NOT_FOUND,
+        E_ABORT | CANCELLED | COPYENGINE_E_USER_CANCELLED => keys::CANCELLED,
+        _ => {
+            return Msg::new(keys::WINDOWS_ERROR).with("code", format!("0x{:08X}", code.0 as u32));
         }
-        FILE_NOT_FOUND | PATH_NOT_FOUND => "Datei nicht gefunden",
-        E_ABORT | CANCELLED | COPYENGINE_E_USER_CANCELLED => "Vorgang abgebrochen",
-        _ => return format!("Windows-Fehler 0x{:08X}", code.0 as u32),
     };
-    text.to_string()
+    Msg::new(key)
 }
 
 #[cfg(test)]
@@ -417,6 +412,11 @@ mod tests {
         path
     }
 
+    /// "Original kept: recycle bin not possible (<reason>)".
+    fn recycle_failed(reason: &str) -> Msg {
+        Msg::new(keys::KEPT_RECYCLE_FAILED).with_msg("reason", Msg::new(reason))
+    }
+
     #[test]
     fn trash_needs_all_conditions() {
         for bits in 0..16u8 {
@@ -444,8 +444,8 @@ mod tests {
         let file = original(&dir);
         let bin = fake(Availability::NoRecycleBin, false);
         assert_eq!(
-            handle_original(&all_true(), &file, &bin).as_deref(),
-            Some("Original behalten: kein Papierkorb auf diesem Laufwerk")
+            handle_original(&all_true(), &file, &bin),
+            Some(Msg::new(keys::KEPT_NO_RECYCLE_BIN))
         );
         assert!(bin.recycled.lock().unwrap().is_empty());
         assert!(file.exists());
@@ -457,8 +457,8 @@ mod tests {
         let file = original(&dir);
         let bin = fake(Availability::TooLarge, false);
         assert_eq!(
-            handle_original(&all_true(), &file, &bin).as_deref(),
-            Some("Original behalten: zu groß für den Papierkorb")
+            handle_original(&all_true(), &file, &bin),
+            Some(Msg::new(keys::KEPT_TOO_LARGE))
         );
         assert!(bin.recycled.lock().unwrap().is_empty());
         assert!(file.exists());
@@ -470,10 +470,7 @@ mod tests {
         let file = original(&dir);
         let bin = fake(Availability::Available, true);
         let note = handle_original(&all_true(), &file, &bin).unwrap();
-        assert_eq!(
-            note,
-            "Original behalten: Papierkorb nicht möglich (Testfehler)"
-        );
+        assert_eq!(note, recycle_failed(keys::REASON_INTERNAL));
         assert!(file.exists());
     }
 
@@ -491,10 +488,7 @@ mod tests {
         #[allow(clippy::permissions_set_readonly_false)]
         perms.set_readonly(false);
         fs::set_permissions(&file, perms).unwrap();
-        assert_eq!(
-            note.as_deref(),
-            Some("Original behalten: Papierkorb nicht möglich (Datei ist schreibgeschützt)")
-        );
+        assert_eq!(note, Some(recycle_failed(keys::READ_ONLY)));
         assert!(bin.recycled.lock().unwrap().is_empty());
     }
 
@@ -503,10 +497,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let bin = fake(Availability::Available, false);
         let note = handle_original(&all_true(), &dir.path().join("weg.jpg"), &bin);
-        assert_eq!(
-            note.as_deref(),
-            Some("Original behalten: Papierkorb nicht möglich (Datei nicht gefunden)")
-        );
+        assert_eq!(note, Some(recycle_failed(keys::NOT_FOUND)));
         assert!(bin.recycled.lock().unwrap().is_empty());
     }
 
@@ -553,18 +544,26 @@ mod tests {
     }
 
     #[test]
-    fn failure_reasons_are_short_german_texts() {
+    fn failure_reasons_are_reason_keys() {
         use windows::Win32::Foundation::{E_ACCESSDENIED, ERROR_SHARING_VIOLATION};
         use windows::Win32::UI::Shell::COPYENGINE_E_USER_CANCELLED;
-        assert_eq!(reason(E_ACCESSDENIED), "Zugriff verweigert");
+        assert_eq!(reason(E_ACCESSDENIED), Msg::new(keys::ACCESS_DENIED));
         assert_eq!(
             reason(HRESULT::from_win32(ERROR_SHARING_VIOLATION.0)),
-            "Datei wird von einem anderen Programm verwendet"
+            Msg::new(keys::IN_USE)
         );
-        assert_eq!(reason(COPYENGINE_E_USER_CANCELLED), "Vorgang abgebrochen");
+        assert_eq!(
+            reason(COPYENGINE_E_USER_CANCELLED),
+            Msg::new(keys::CANCELLED)
+        );
         assert_eq!(
             reason(HRESULT(0x8027_0058_u32 as i32)),
-            "Windows-Fehler 0x80270058"
+            Msg::new(keys::WINDOWS_ERROR).with("code", "0x80270058")
+        );
+        // Upper-case hex digits.
+        assert_eq!(
+            reason(HRESULT(0x8007_00AA_u32 as i32)),
+            Msg::new(keys::WINDOWS_ERROR).with("code", "0x800700AA")
         );
     }
 

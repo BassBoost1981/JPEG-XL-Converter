@@ -8,6 +8,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use serde::{Deserialize, Serialize};
 
+use super::msg::Msg;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Mode {
@@ -116,7 +118,9 @@ pub struct Outcome {
     pub status: ItemStatus,
     pub out_path: Option<PathBuf>,
     pub out_size: Option<u64>,
-    pub note: Option<String>,
+    /// Why the file was skipped or failed, or what to know about a finished one
+    /// (in the order they arose). Empty for `Done` and `Waiting`.
+    pub notes: Vec<Msg>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -126,7 +130,7 @@ pub struct ItemEvent {
     pub status: ItemStatus,
     pub progress: u8,
     pub out_size: Option<u64>,
-    pub note: Option<String>,
+    pub notes: Vec<Msg>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -153,7 +157,8 @@ pub struct ToolStatus {
     pub ok: bool,
     pub cjxl_version: Option<String>,
     pub djxl_version: Option<String>,
-    pub message: Option<String>,
+    /// One message per tool that failed its check; empty when `ok`.
+    pub messages: Vec<Msg>,
 }
 
 /// Shared cancel flag. Clones observe the same flag.
@@ -177,7 +182,65 @@ impl CancelToken {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::msg::keys;
     use serde_json::json;
+
+    #[test]
+    fn notes_and_messages_are_lists_of_msg() {
+        let event = ItemEvent {
+            id: 3,
+            status: ItemStatus::Skipped,
+            progress: 100,
+            out_size: None,
+            notes: vec![Msg::new(keys::TARGET_EXISTS)],
+        };
+        assert_eq!(
+            serde_json::to_value(&event).unwrap(),
+            json!({"id": 3, "status": "skipped", "progress": 100, "outSize": null,
+                   "notes": [{"key": "error.targetExists"}]})
+        );
+        let running = ItemEvent {
+            id: 4,
+            status: ItemStatus::Running,
+            progress: 5,
+            out_size: None,
+            notes: Vec::new(),
+        };
+        assert_eq!(serde_json::to_value(&running).unwrap()["notes"], json!([]));
+
+        let outcome = Outcome {
+            status: ItemStatus::DoneWithNote,
+            out_path: None,
+            out_size: Some(10),
+            notes: vec![
+                Msg::new(keys::DATES_NOT_KEPT),
+                Msg::new(keys::KEPT_RECYCLE_FAILED).with_msg(
+                    "reason",
+                    Msg::new(keys::WINDOWS_ERROR).with("code", "0x80270058"),
+                ),
+            ],
+        };
+        assert_eq!(
+            serde_json::to_value(&outcome).unwrap(),
+            json!({"status": "doneWithNote", "outPath": null, "outSize": 10, "notes": [
+                {"key": "note.datesNotKept"},
+                {"key": "note.keptRecycleFailed", "params": {"reason":
+                    {"key": "reason.windowsError", "params": {"code": "0x80270058"}}}}
+            ]})
+        );
+
+        let tools = ToolStatus {
+            ok: false,
+            cjxl_version: None,
+            djxl_version: Some("0.12.0".into()),
+            messages: vec![Msg::new(keys::WONT_START).with("name", "cjxl.exe")],
+        };
+        assert_eq!(
+            serde_json::to_value(&tools).unwrap(),
+            json!({"ok": false, "cjxlVersion": null, "djxlVersion": "0.12.0",
+                   "messages": [{"key": "tool.wontStart", "params": {"name": "cjxl.exe"}}]})
+        );
+    }
 
     #[test]
     fn json_shapes_match_shared_contract() {

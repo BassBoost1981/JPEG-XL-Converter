@@ -16,8 +16,8 @@ use std::time::{Duration, Instant};
 use super::decode::{decode_ext, decode_one};
 use super::disk::free_bytes;
 use super::encode::{Ctx, encode_one};
+use super::msg::{Msg, keys};
 use super::originals::RecycleBin;
-use super::pipeline_util::TARGET_EXISTS;
 use super::report::RunReport;
 use super::scan::identity;
 use super::targets::target_path;
@@ -26,10 +26,6 @@ use super::types::{
     CancelToken, ItemEvent, ItemStatus, JobSettings, Mode, Outcome, PauseReason, QueueItem,
     RunSummary, ScanEntry,
 };
-
-const TARGET_UNKNOWN: &str = "Zielpfad lässt sich nicht bestimmen";
-const CLEAR_WHILE_RUNNING: &str =
-    "Die Warteschlange lässt sich während eines Durchlaufs nicht leeren";
 
 pub trait Processor: Send + Sync {
     fn target_for(&self, mode: Mode, e: &ScanEntry, s: &JobSettings) -> io::Result<PathBuf>;
@@ -250,10 +246,10 @@ impl Queue {
     }
 
     /// Removes every item of `mode`. Refused while a run is active.
-    pub fn clear(&self, mode: Mode) -> Result<(), String> {
+    pub fn clear(&self, mode: Mode) -> Result<(), Msg> {
         let mut st = self.inner.lock();
         if st.run.is_some() {
-            return Err(CLEAR_WHILE_RUNNING.to_string());
+            return Err(Msg::new(keys::CLEAR_WHILE_RUNNING));
         }
         st.items.retain(|item| item.mode != mode);
         Ok(())
@@ -340,7 +336,7 @@ impl Inner {
             status,
             progress,
             out_size: o.and_then(|o| o.out_size),
-            note: o.and_then(|o| o.note.clone()),
+            notes: o.map(|o| o.notes.clone()).unwrap_or_default(),
         });
     }
 
@@ -443,7 +439,7 @@ impl Inner {
                     status: ItemStatus::Waiting,
                     out_path: None,
                     out_size: None,
-                    note: None,
+                    notes: Vec::new(),
                 }
             }
         };
@@ -474,15 +470,15 @@ impl Inner {
             .target_for(job.mode, &job.entry, &job.settings)
         {
             Ok(target) => target,
-            Err(_) => return JobEnd::Finished(stopped(ItemStatus::Error, TARGET_UNKNOWN)),
+            Err(_) => return JobEnd::Finished(stopped(ItemStatus::Error, keys::TARGET_UNKNOWN)),
         };
         // Windows paths ignore letter case.
         let key = identity(&target).to_string_lossy().to_lowercase();
         if !self.lock().reserved.insert(key.clone()) {
-            return JobEnd::Finished(stopped(ItemStatus::Skipped, TARGET_EXISTS));
+            return JobEnd::Finished(stopped(ItemStatus::Skipped, keys::TARGET_EXISTS));
         }
         let end = if target.exists() {
-            JobEnd::Finished(stopped(ItemStatus::Skipped, TARGET_EXISTS))
+            JobEnd::Finished(stopped(ItemStatus::Skipped, keys::TARGET_EXISTS))
         } else if !self.processor.has_space(job.mode, &job.entry, &target) {
             JobEnd::NoSpace(drive_of(&target))
         } else {
@@ -523,12 +519,13 @@ impl Inner {
     }
 }
 
-fn stopped(status: ItemStatus, note: &str) -> Outcome {
+/// An outcome with the single note `key`.
+fn stopped(status: ItemStatus, key: &str) -> Outcome {
     Outcome {
         status,
         out_path: None,
         out_size: None,
-        note: Some(note.to_string()),
+        notes: vec![Msg::new(key)],
     }
 }
 
@@ -673,7 +670,7 @@ mod tests {
                         status: ItemStatus::Waiting,
                         out_path: None,
                         out_size: None,
-                        note: None,
+                        notes: Vec::new(),
                     };
                 }
                 // The token has no wake-up; look again shortly.
@@ -697,7 +694,11 @@ mod tests {
                 status,
                 out_path: done.then(|| target.to_path_buf()),
                 out_size: done.then_some(e.size / 2),
-                note: (!done).then(|| format!("Grund für {name}")),
+                notes: if done {
+                    Vec::new()
+                } else {
+                    vec![Msg::new(keys::CANNOT_READ)]
+                },
             }
         }
     }
@@ -897,10 +898,7 @@ mod tests {
             Rec::Item(ev) if ev.status == ItemStatus::Skipped => Some(ev.clone()),
             _ => None,
         });
-        assert_eq!(
-            skipped.unwrap().note.as_deref(),
-            Some("Zieldatei existiert bereits")
-        );
+        assert_eq!(skipped.unwrap().notes, [Msg::new(keys::TARGET_EXISTS)]);
     }
 
     /// Review Focus 5: the same file twice, and a folder plus a file from it.
@@ -1173,7 +1171,7 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("Fehler\tQ:\\bilder\\e.png\tGrund für e.png"),
+            text.contains("Fehler\tQ:\\bilder\\e.png\tBild lässt sich nicht lesen"),
             "{text}"
         );
     }

@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use common::{JpegOpts, PngKind};
 use image::{DynamicImage, GenericImageView};
+use jpeg_xl_konverter_lib::engine::msg::{Msg, keys};
 use jpeg_xl_konverter_lib::engine::preview::{make_preview, thumbnail};
 use jpeg_xl_konverter_lib::engine::scan::scan_paths;
 use jpeg_xl_konverter_lib::engine::tools::Tools;
@@ -60,7 +61,7 @@ impl Env {
         mode: Mode,
         s: &JobSettings,
         view: (u32, u32),
-    ) -> Result<jpeg_xl_konverter_lib::engine::preview::Preview, String> {
+    ) -> Result<jpeg_xl_konverter_lib::engine::preview::Preview, Msg> {
         make_preview(entry, mode, s, view.0, view.1, &self.tools, &self.work)
     }
 }
@@ -232,7 +233,7 @@ fn unsupported_sources_are_refused_without_leftovers() {
         .preview(&entry, Mode::Enc, &s, (40, 30))
         .err()
         .expect("CMYK must be refused");
-    assert!(!err.is_empty());
+    assert_eq!(err.key, keys::PREVIEW_UNSUPPORTED);
     assert!(thumbnail(&entry, 80, &env.tools, &env.work).is_err());
     env.assert_work_empty();
 }

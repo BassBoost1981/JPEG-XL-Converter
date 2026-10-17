@@ -14,12 +14,18 @@ use image::{
     Delay, DynamicImage, ExtendedColorType, Frame, GrayImage, ImageBuffer, ImageEncoder,
     ImageFormat, Rgb, RgbImage, Rgba, RgbaImage,
 };
+use jpeg_xl_konverter_lib::engine::msg::Msg;
 use jpeg_xl_konverter_lib::engine::tools::Tools;
 use png::chunk::ChunkType;
 
 /// Size of every image written by the helpers that take no size argument.
 pub const FIXTURE_W: u32 = 64;
 pub const FIXTURE_H: u32 = 48;
+
+/// The catalog keys of `msgs`, in order.
+pub fn keys_of(msgs: &[Msg]) -> Vec<&str> {
+    msgs.iter().map(|m| m.key.as_str()).collect()
+}
 
 /// Finds `cjxl`/`djxl` the way the app does (next to the test binary, then in
 /// `src-tauri/binaries`). Panics with a hint when they are missing.

@@ -21,13 +21,14 @@ use image::{DynamicImage, ImageFormat};
 use super::args::{DjxlTarget, cjxl_args, djxl_args};
 use super::convert_io::from_png;
 use super::jxl_container::has_jpeg_reconstruction;
+use super::msg::{Msg, keys};
 use super::pipeline_util::{Scratch, load, unique_prefix};
 use super::tools::Tools;
 use super::types::{CancelToken, InputKind, JobSettings, Mode, OutputFormat, ScanEntry};
 
-const UNAVAILABLE: &str = "Vorschau nicht möglich";
-const UNSUPPORTED: &str = "Vorschau nicht möglich: Bild nicht unterstützt oder zu groß";
-const WRONG_MODE: &str = "Vorschau nicht möglich: Datei passt nicht zum Modus";
+const UNAVAILABLE: &str = keys::PREVIEW_UNAVAILABLE;
+const UNSUPPORTED: &str = keys::PREVIEW_UNSUPPORTED;
+const WRONG_MODE: &str = keys::PREVIEW_WRONG_MODE;
 /// djxl output for previews: full bit depth, as the checks in encode use it.
 const PREVIEW_PNG: DjxlTarget = DjxlTarget::Png {
     reduce_to_8bit: false,
@@ -58,15 +59,15 @@ pub fn make_preview(
     view_h: u32,
     tools: &Tools,
     work_dir: &Path,
-) -> Result<Preview, String> {
+) -> Result<Preview, Msg> {
     if (mode == Mode::Dec) != (entry.kind == InputKind::Jxl) {
-        return Err(WRONG_MODE.to_string());
+        return Err(Msg::new(WRONG_MODE));
     }
     let mut scratch = Scratch::default();
     let image = load_source(entry, tools, work_dir, &mut scratch)?;
     let (x, y, w, h) = crop_rect(image.width(), image.height(), view_w, view_h);
     if w == 0 || h == 0 {
-        return Err(UNAVAILABLE.to_string());
+        return Err(Msg::new(UNAVAILABLE));
     }
     let crop = image.crop_imm(x, y, w, h);
     let before_png = png_bytes(&crop)?;
@@ -88,7 +89,7 @@ pub fn make_preview(
         }
         Mode::Dec => match s.decode.format {
             OutputFormat::Jpg | OutputFormat::Auto
-                if has_jpeg_reconstruction(&entry.path).map_err(|_| UNAVAILABLE)? =>
+                if has_jpeg_reconstruction(&entry.path).map_err(|_| Msg::new(UNAVAILABLE))? =>
             {
                 // The real conversion gives back the original JPEG.
                 return same(true);
@@ -112,7 +113,7 @@ pub fn thumbnail(
     size: u32,
     tools: &Tools,
     work_dir: &Path,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, Msg> {
     let mut scratch = Scratch::default();
     let image = load_source(entry, tools, work_dir, &mut scratch)?;
     let longest = image.width().max(image.height());
@@ -131,23 +132,23 @@ fn load_source(
     tools: &Tools,
     work_dir: &Path,
     scratch: &mut Scratch,
-) -> Result<DynamicImage, String> {
+) -> Result<DynamicImage, Msg> {
     let (mut image, orientation) = if entry.kind == InputKind::Jxl {
         let png = work_file(work_dir, scratch, "quelle.png")?;
         let args = djxl_args(PREVIEW_PNG);
         tools
             .run_djxl(&entry.path, &png, &args, &CancelToken::new())
-            .map_err(|_| UNAVAILABLE.to_string())?;
+            .map_err(|_| Msg::new(UNAVAILABLE))?;
         load(&png)
     } else {
         load(&entry.path)
     }
-    .map_err(|()| UNSUPPORTED.to_string())?;
+    .map_err(|()| Msg::new(UNSUPPORTED))?;
     if matches!(
         image,
         DynamicImage::ImageRgb32F(_) | DynamicImage::ImageRgba32F(_)
     ) {
-        return Err(UNSUPPORTED.to_string());
+        return Err(Msg::new(UNSUPPORTED));
     }
     image.apply_orientation(orientation);
     Ok(image)
@@ -161,11 +162,11 @@ fn lossy_jxl(
     tools: &Tools,
     work_dir: &Path,
     scratch: &mut Scratch,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, Msg> {
     let png = work_file(work_dir, scratch, "ausschnitt.png")?;
     let jxl = work_file(work_dir, scratch, "ausschnitt.jxl")?;
     let out = work_file(work_dir, scratch, "nachher.png")?;
-    std::fs::write(&png, crop_png).map_err(|_| UNAVAILABLE.to_string())?;
+    std::fs::write(&png, crop_png).map_err(|_| Msg::new(UNAVAILABLE))?;
     let cancel = CancelToken::new();
     // The crop is a PNG whatever the source was; a JPEG source without
     // transcoding is encoded from these pixels at the chosen distance.
@@ -173,18 +174,18 @@ fn lossy_jxl(
     tools
         .run_cjxl(&png, &jxl, &args, &cancel)
         .and_then(|()| tools.run_djxl(&jxl, &out, &djxl_args(PREVIEW_PNG), &cancel))
-        .map_err(|_| UNAVAILABLE.to_string())?;
-    std::fs::read(&out).map_err(|_| UNAVAILABLE.to_string())
+        .map_err(|_| Msg::new(UNAVAILABLE))?;
+    std::fs::read(&out).map_err(|_| Msg::new(UNAVAILABLE))
 }
 
 /// The crop as a JPEG of `quality`, read back.
-fn as_jpeg(crop: &DynamicImage, quality: u8) -> Result<Vec<u8>, String> {
+fn as_jpeg(crop: &DynamicImage, quality: u8) -> Result<Vec<u8>, Msg> {
     let mut jpeg = Vec::new();
     crop.to_rgb8()
         .write_with_encoder(JpegEncoder::new_with_quality(&mut jpeg, quality))
-        .map_err(|_| UNAVAILABLE.to_string())?;
+        .map_err(|_| Msg::new(UNAVAILABLE))?;
     let back = image::load_from_memory_with_format(&jpeg, ImageFormat::Jpeg)
-        .map_err(|_| UNAVAILABLE.to_string())?;
+        .map_err(|_| Msg::new(UNAVAILABLE))?;
     png_bytes(&back)
 }
 
@@ -194,27 +195,27 @@ fn as_webp(
     s: &JobSettings,
     work_dir: &Path,
     scratch: &mut Scratch,
-) -> Result<Vec<u8>, String> {
+) -> Result<Vec<u8>, Msg> {
     let png = work_file(work_dir, scratch, "ausschnitt.png")?;
     let webp = work_file(work_dir, scratch, "nachher.webp")?;
-    std::fs::write(&png, crop_png).map_err(|_| UNAVAILABLE.to_string())?;
+    std::fs::write(&png, crop_png).map_err(|_| Msg::new(UNAVAILABLE))?;
     from_png(&png, &webp, OutputFormat::Webp, s.keep_metadata)?;
-    let (back, _) = load(&webp).map_err(|()| UNAVAILABLE.to_string())?;
+    let (back, _) = load(&webp).map_err(|()| Msg::new(UNAVAILABLE))?;
     png_bytes(&back)
 }
 
 /// A new work file path (unique to this call), removed when `scratch` drops.
-fn work_file(dir: &Path, scratch: &mut Scratch, suffix: &str) -> Result<PathBuf, String> {
-    std::fs::create_dir_all(dir).map_err(|_| UNAVAILABLE.to_string())?;
+fn work_file(dir: &Path, scratch: &mut Scratch, suffix: &str) -> Result<PathBuf, Msg> {
+    std::fs::create_dir_all(dir).map_err(|_| Msg::new(UNAVAILABLE))?;
     let name = format!("{}-{suffix}", unique_prefix("vorschau"));
     Ok(scratch.add(dir.join(name)))
 }
 
-fn png_bytes(image: &DynamicImage) -> Result<Vec<u8>, String> {
+fn png_bytes(image: &DynamicImage) -> Result<Vec<u8>, Msg> {
     let mut out = Cursor::new(Vec::new());
     image
         .write_to(&mut out, ImageFormat::Png)
-        .map_err(|_| UNAVAILABLE.to_string())?;
+        .map_err(|_| Msg::new(UNAVAILABLE))?;
     Ok(out.into_inner())
 }
 
