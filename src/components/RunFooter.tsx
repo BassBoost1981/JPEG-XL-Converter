@@ -80,9 +80,9 @@ export function RunFooter() {
   return (
     <div className="flex flex-none flex-col gap-3 border-t border-[var(--line)] px-[18px] py-4">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-pretty text-xs text-[var(--muted)]">{line}</span>
+        <span className="min-w-0 flex-1 text-pretty text-xs text-[var(--muted)]">{line}</span>
         <span
-          className="text-[22px] font-semibold"
+          className="shrink-0 whitespace-nowrap text-[22px] font-semibold"
           style={{ color: hasDelta && shownOut < shownIn ? "var(--good)" : "var(--muted)" }}
         >
           {saved}
