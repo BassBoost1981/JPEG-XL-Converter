@@ -117,9 +117,13 @@ docs/                Spezifikation, Plan, Abnahme, Werkzeug-Notizen, Entwurf
 
 Weitere Unterlagen: [Spezifikation](docs/superpowers/specs/2026-10-16-jpeg-xl-konverter-design.md) · [Umsetzungsplan](docs/superpowers/plans/2026-10-16-jpeg-xl-konverter.md) · [libjxl-Notizen](docs/libjxl-notes.md) · [Abnahme](docs/ABNAHME.md)
 
-## Mitgelieferte Komponenten
+## Lizenz
 
-Der portable Ordner enthält die Lizenztexte aller mitgelieferten Komponenten unter `LICENSES\`:
+Der JPEG XL Konverter steht unter der **[MIT-Lizenz](LICENSE)**, © 2026 BassBoost1981.
+
+### Mitgelieferte Komponenten
+
+Die mitgelieferten Komponenten behalten ihre eigenen Lizenzen. Der portable Ordner enthält ihre Lizenztexte unter `LICENSES\`:
 
 - **libjxl** (`cjxl`/`djxl`, BSD-3-Clause), einschließlich der darin statisch eingebauten Bibliotheken (brotli, giflib, highway, libjpeg-turbo, libpng, libwebp, sjpeg, skcms, zlib)
 - **libwebp** (BSD-3-Clause), für die WebP-Ausgabe
