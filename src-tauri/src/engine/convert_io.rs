@@ -1,0 +1,794 @@
+//! TIFF, WebP and BMP <-> PNG. cjxl cannot read those three, so they take a
+//! detour through an intermediate PNG that carries ICC profile and EXIF, and
+//! djxl's PNG is turned into TIFF or WebP on the way back. Every conversion
+//! says what happened to the metadata (`MetaTransfer`); the pipelines use
+//! that to decide whether an original may be moved to the recycle bin, so a
+//! field is only `Transferred` or `NotPresent` when that is certain.
+//!
+//! The `exif` field stands for the descriptive metadata the user can switch
+//! off with "keep metadata": EXIF, XMP and IPTC. The `icc` field is the colour
+//! profile, which defines what the pixel values mean; it is therefore carried
+//! into the PNG whatever the metadata switch says. The `frames` field is not
+//! metadata but belongs to the same question, "may the original go?": a
+//! multi-page TIFF or animated WebP is converted from its first page or frame
+//! only, and the rest is `Lost`.
+//!
+//! User-facing errors are short German texts without library detail.
+
+use std::fs::{self, File};
+use std::io::{self, BufReader, BufWriter, Read, Seek, Write};
+use std::path::Path;
+
+use image::codecs::png::{CompressionType, FilterType, PngEncoder};
+use image::codecs::tiff::TiffEncoder;
+use image::{
+    ColorType, DynamicImage, ExtendedColorType, ImageDecoder, ImageEncoder, ImageError,
+    ImageFormat, ImageReader, Limits,
+};
+use tiff::tags::Tag;
+
+use super::types::OutputFormat;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MetaState {
+    /// The source had nothing of this kind (or the user switched it off).
+    NotPresent,
+    /// Written to the result.
+    Transferred,
+    /// The source had it and the result does not.
+    Lost,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MetaTransfer {
+    /// The descriptive metadata: EXIF, XMP and IPTC.
+    pub exif: MetaState,
+    pub icc: MetaState,
+    /// Further pages (multi-page TIFF) or frames (animated WebP) of the source.
+    /// A conversion keeps the first one only, so these are `Lost` or `NotPresent`.
+    pub frames: MetaState,
+}
+
+impl MetaTransfer {
+    /// `true` if nothing was lost.
+    pub fn complete(&self) -> bool {
+        [self.exif, self.icc, self.frames]
+            .iter()
+            .all(|&state| state != MetaState::Lost)
+    }
+}
+
+const OPEN_ERROR: &str = "Datei lässt sich nicht öffnen";
+const READ_ERROR: &str = "Bild lässt sich nicht lesen";
+const WRITE_ERROR: &str = "Datei lässt sich nicht schreiben";
+const EDIT_ERROR: &str = "Datei lässt sich nicht bearbeiten";
+const TOO_BIG_ERROR: &str = "Bild ist zu groß zum Umwandeln";
+const FORMAT_ERROR: &str = "Ausgabeformat wird nicht unterstützt";
+const SOURCE_FORMAT_ERROR: &str = "Format wird hier nicht unterstützt";
+const CMYK_ERROR: &str = "CMYK-Bilder werden nicht unterstützt";
+const FLOAT_ERROR: &str = "Gleitkomma-Bilder werden nicht unterstützt";
+
+/// Largest decoded image accepted. The image crate's default of 512 MiB would
+/// turn away big 16-bit scans.
+const MAX_DECODED_BYTES: u64 = 4 << 30;
+/// libwebp cannot store a side longer than this.
+const WEBP_MAX_SIDE: u32 = 16_383;
+const WEBP_QUALITY: f32 = 90.0;
+/// Some writers put this APP1 header in front of the TIFF block of an EXIF chunk.
+const EXIF_HEADER: &[u8] = b"Exif\0\0";
+
+/// `Lost` if the source had something that is not in the result, else `NotPresent`.
+fn lost(present: bool) -> MetaState {
+    if present {
+        MetaState::Lost
+    } else {
+        MetaState::NotPresent
+    }
+}
+
+/// Converts a TIFF, WebP or BMP (recognised by content, not by extension) to a
+/// PNG that cjxl can take. 8 and 16 bit stay as they are. Anything the PNG
+/// cannot hold without changing the pixels is refused with a German error
+/// instead: any other file format, CMYK images (the image crate converts them
+/// to RGB by a naive formula and drops the K channel) and float images (16 bit
+/// would round them).
+///
+/// ICC profile: carried when the source has one, whatever `keep_metadata` says.
+/// EXIF, XMP and IPTC: only looked at when `keep_metadata` is set (otherwise
+/// `NotPresent`). EXIF goes into an `eXIf` chunk; XMP and IPTC cannot be
+/// carried and count as `Lost`.
+///
+/// What the decoders can tell (image 0.25.10):
+/// - WebP: EXIF, ICC and XMP, read from the RIFF chunks.
+/// - TIFF: ICC and XMP, but no EXIF, because TIFF keeps EXIF as tags of its
+///   first directory. If it has such tags, or IPTC, the `exif` field is `Lost`
+///   (see `tiff_metadata`, which also explains why the image crate is not asked).
+/// - BMP: nothing. A BMP v5 header that names a colour profile (embedded or
+///   linked) makes `icc` `Lost`, since the profile is not read (see
+///   `bmp_has_profile`).
+///
+/// Only the first page of a TIFF or the first frame of an animated WebP is
+/// converted; if there are more, `frames` is `Lost`.
+///
+/// A failed conversion leaves no output file behind.
+pub fn to_png(src: &Path, dst_png: &Path, keep_metadata: bool) -> Result<MetaTransfer, String> {
+    let reader = open_reader(src)?;
+    let format = reader.format();
+    match format {
+        Some(ImageFormat::Tiff | ImageFormat::WebP | ImageFormat::Bmp) => {}
+        Some(_) => return Err(SOURCE_FORMAT_ERROR.to_string()),
+        None => return Err(READ_ERROR.to_string()),
+    }
+    let mut decoder = decoder_for(reader)?;
+    if matches!(
+        decoder.original_color_type(),
+        ExtendedColorType::Cmyk8 | ExtendedColorType::Cmyk16
+    ) {
+        return Err(CMYK_ERROR.to_string());
+    }
+    if matches!(decoder.color_type(), ColorType::Rgb32F | ColorType::Rgba32F) {
+        return Err(FLOAT_ERROR.to_string());
+    }
+    let mut meta = if format == Some(ImageFormat::Tiff) {
+        tiff_metadata(src, keep_metadata)?
+    } else {
+        decoder_metadata(&mut decoder, keep_metadata)?
+    };
+    if format == Some(ImageFormat::WebP) {
+        meta.more_frames = webp_has_more_frames(src)?;
+    }
+    if format == Some(ImageFormat::Bmp) {
+        meta.icc_uncarried = bmp_has_profile(src)?;
+    }
+    let image = DynamicImage::from_decoder(decoder).map_err(|e| image_error(&e))?;
+
+    let exif_state = if !keep_metadata {
+        MetaState::NotPresent
+    } else if meta.uncarried {
+        MetaState::Lost
+    } else if meta.exif.is_some() {
+        MetaState::Transferred
+    } else {
+        MetaState::NotPresent
+    };
+    let icc_state = if meta.icc_uncarried {
+        MetaState::Lost
+    } else if meta.icc.is_some() {
+        MetaState::Transferred
+    } else {
+        MetaState::NotPresent
+    };
+
+    write_png(&image, dst_png, meta.icc, meta.exif)?;
+    Ok(MetaTransfer {
+        exif: exif_state,
+        icc: icc_state,
+        frames: lost(meta.more_frames),
+    })
+}
+
+/// Converts the PNG djxl wrote to TIFF (lossless) or WebP (lossy, quality 90).
+/// Other formats are refused.
+///
+/// The TIFF takes the ICC profile along (`Transferred`). It is `Lost` if the PNG
+/// has an `iCCP` chunk that cannot be read, and for gray + alpha images, which
+/// the TIFF writer widens to RGBA, where a gray profile would not fit. Neither
+/// output carries EXIF or XMP, so these are `Lost` if the PNG has them and the
+/// user did not switch metadata off; WebP does not carry the ICC profile either.
+/// Only the first image is converted: an animated PNG (djxl writes one for an
+/// animated JXL) makes `frames` `Lost`.
+///
+/// A failed conversion leaves no output file behind.
+pub fn from_png(
+    src_png: &Path,
+    dst: &Path,
+    format: OutputFormat,
+    keep_metadata: bool,
+) -> Result<MetaTransfer, String> {
+    if !matches!(format, OutputFormat::Tiff | OutputFormat::Webp) {
+        return Err(FORMAT_ERROR.to_string());
+    }
+    let found = scan_png(src_png)?;
+    let mut decoder = decoder_for(open_reader(src_png)?)?;
+    let icc = non_empty(decoder.icc_profile().map_err(|e| image_error(&e))?);
+    let image = DynamicImage::from_decoder(decoder).map_err(|e| image_error(&e))?;
+
+    let icc_state = if format == OutputFormat::Tiff {
+        if write_tiff(image, icc, dst)? {
+            MetaState::Transferred
+        } else {
+            lost(found.icc)
+        }
+    } else {
+        write_webp(image, dst)?;
+        lost(found.icc)
+    };
+    Ok(MetaTransfer {
+        exif: lost(keep_metadata && (found.exif || found.xmp)),
+        icc: icc_state,
+        frames: lost(found.animated),
+    })
+}
+
+/// Rewrites a PNG without EXIF and XMP: the `eXIf` chunk and the `tEXt`,
+/// `zTXt` and `iTXt` chunks with the keywords `Raw profile type exif`,
+/// `Raw profile type xmp` and `XML:com.adobe.xmp` (djxl writes EXIF as
+/// a `zTXt` chunk with the first of those keywords, never as `eXIf`).
+/// Everything else, the ICC profile included, is copied byte for byte. A PNG
+/// without such chunks is not touched.
+pub fn strip_png_metadata(path: &Path) -> Result<(), String> {
+    let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
+    let found = scan(&mut input).map_err(|_| READ_ERROR.to_string())?;
+    if !found.exif && !found.xmp {
+        return Ok(());
+    }
+
+    input.rewind().map_err(|_| EDIT_ERROR.to_string())?;
+    // `input` moves into the closure and is closed before the rename
+    // (Windows cannot replace a file that is still open).
+    replace_file(path, move |out| {
+        copy_without_metadata(&mut input, out).map_err(|e| match e.kind() {
+            io::ErrorKind::UnexpectedEof | io::ErrorKind::InvalidData => READ_ERROR.to_string(),
+            _ => EDIT_ERROR.to_string(),
+        })
+    })
+}
+
+/// Rewrites a JPEG without its APP1 segments (EXIF, XMP) and APP13 segments
+/// (Photoshop/IPTC). Every other segment and the image data after the first
+/// SOS marker are copied byte for byte. A JPEG without such segments is not
+/// touched.
+pub fn strip_jpeg_metadata(path: &Path) -> Result<(), String> {
+    let bytes = fs::read(path).map_err(|_| OPEN_ERROR.to_string())?;
+    let kept = jpeg_without_metadata(&bytes).ok_or_else(|| READ_ERROR.to_string())?;
+    if kept.len() == bytes.len() {
+        return Ok(());
+    }
+    replace_file(path, |out| {
+        out.write_all(&kept).map_err(|_| WRITE_ERROR.to_string())
+    })
+}
+
+/// Writes a sibling `.strip.tmp` with `write` and renames it over `path`.
+fn replace_file(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut tmp_name = path.file_name().unwrap_or_default().to_os_string();
+    tmp_name.push(".strip.tmp");
+    let tmp = path.with_file_name(tmp_name);
+    write_file(&tmp, write)?;
+    fs::rename(&tmp, path).map_err(|_| {
+        let _ = fs::remove_file(&tmp);
+        EDIT_ERROR.to_string()
+    })
+}
+
+/// The JPEG in `bytes` without APP1 and APP13 segments. `None` if it does
+/// not start with SOI or a segment before SOS is cut off or malformed.
+fn jpeg_without_metadata(bytes: &[u8]) -> Option<Vec<u8>> {
+    const SOI: [u8; 2] = [0xFF, 0xD8];
+    const SOS: u8 = 0xDA;
+    const EOI: u8 = 0xD9;
+    const APP1: u8 = 0xE1;
+    const APP13: u8 = 0xED;
+    if !bytes.starts_with(&SOI) {
+        return None;
+    }
+    let mut out = SOI.to_vec();
+    let mut pos = SOI.len();
+    loop {
+        if *bytes.get(pos)? != 0xFF {
+            return None;
+        }
+        // Fill bytes: any number of 0xFF before the marker code.
+        let mut code_at = pos + 1;
+        while *bytes.get(code_at)? == 0xFF {
+            code_at += 1;
+        }
+        let code = bytes[code_at];
+        match code {
+            SOS | EOI => {
+                out.extend_from_slice(&bytes[pos..]);
+                return Some(out);
+            }
+            // Markers without a length field.
+            0x01 | 0xD0..=0xD7 => {
+                out.extend_from_slice(&bytes[pos..=code_at]);
+                pos = code_at + 1;
+            }
+            _ => {
+                let len_bytes = bytes.get(code_at + 1..code_at + 3)?;
+                let len = usize::from(u16::from_be_bytes([len_bytes[0], len_bytes[1]]));
+                if len < 2 {
+                    return None;
+                }
+                let end = code_at + 1 + len;
+                let segment = bytes.get(pos..end)?;
+                if code != APP1 && code != APP13 {
+                    out.extend_from_slice(segment);
+                }
+                pos = end;
+            }
+        }
+    }
+}
+
+// ------------------------------------------------------------------ reading
+
+fn open_reader(path: &Path) -> Result<ImageReader<BufReader<File>>, String> {
+    let mut reader = ImageReader::open(path)
+        .and_then(ImageReader::with_guessed_format)
+        .map_err(|_| OPEN_ERROR.to_string())?;
+    let mut limits = Limits::default();
+    limits.max_alloc = Some(MAX_DECODED_BYTES);
+    reader.limits(limits);
+    Ok(reader)
+}
+
+/// The decoder for `reader`, refused if the decoded image would be bigger than
+/// `MAX_DECODED_BYTES`. `ImageReader::decode` makes that check on its own,
+/// `into_decoder` followed by `DynamicImage::from_decoder` does not.
+fn decoder_for(reader: ImageReader<BufReader<File>>) -> Result<impl ImageDecoder, String> {
+    let decoder = reader.into_decoder().map_err(|e| image_error(&e))?;
+    if decoder.total_bytes() > MAX_DECODED_BYTES {
+        return Err(TOO_BIG_ERROR.to_string());
+    }
+    Ok(decoder)
+}
+
+fn image_error(error: &ImageError) -> String {
+    match error {
+        ImageError::Limits(_) => TOO_BIG_ERROR,
+        _ => READ_ERROR,
+    }
+    .to_string()
+}
+
+/// What a source file says about its metadata.
+#[derive(Default)]
+struct SourceMeta {
+    icc: Option<Vec<u8>>,
+    /// The TIFF block for an `eXIf` chunk.
+    exif: Option<Vec<u8>>,
+    /// The source has XMP or IPTC, or EXIF that the PNG cannot take along.
+    uncarried: bool,
+    /// The source has a colour profile that is not in `icc`.
+    icc_uncarried: bool,
+    /// The source has more pages or frames than the first.
+    more_frames: bool,
+}
+
+fn non_empty(bytes: Option<Vec<u8>>) -> Option<Vec<u8>> {
+    bytes.filter(|b| !b.is_empty())
+}
+
+/// The TIFF block of an EXIF chunk, without the optional `Exif\0\0` header.
+fn tiff_block(exif: Vec<u8>) -> Vec<u8> {
+    match exif.strip_prefix(EXIF_HEADER) {
+        Some(block) => block.to_vec(),
+        None => exif,
+    }
+}
+
+/// The metadata an image-crate decoder reports. EXIF and XMP only with `keep_metadata`.
+fn decoder_metadata(
+    decoder: &mut impl ImageDecoder,
+    keep_metadata: bool,
+) -> Result<SourceMeta, String> {
+    let icc = decoder.icc_profile().map_err(|e| image_error(&e))?;
+    let mut meta = SourceMeta {
+        icc: non_empty(icc),
+        ..SourceMeta::default()
+    };
+    if keep_metadata {
+        let exif = decoder.exif_metadata().map_err(|e| image_error(&e))?;
+        let xmp = decoder.xmp_metadata().map_err(|e| image_error(&e))?;
+        meta.exif = non_empty(exif.map(tiff_block));
+        meta.uncarried = non_empty(xmp).is_some();
+    }
+    Ok(meta)
+}
+
+/// Tags of a TIFF directory that only describe how the pixels are stored. Every
+/// tag that is not on this list (and not the ICC profile, the orientation or a
+/// colour tag, which are handled on their own) is metadata we do not carry:
+/// camera data, software, dates, XMP, IPTC, Photoshop resources, GeoTIFF, ...
+const STRUCTURE_TAGS: [Tag; 34] = [
+    Tag::NewSubfileType,
+    Tag::SubfileType,
+    Tag::ImageWidth,
+    Tag::ImageLength,
+    Tag::BitsPerSample,
+    Tag::Compression,
+    Tag::PhotometricInterpretation,
+    Tag::Threshholding,
+    Tag::CellWidth,
+    Tag::CellLength,
+    Tag::FillOrder,
+    Tag::StripOffsets,
+    Tag::SamplesPerPixel,
+    Tag::RowsPerStrip,
+    Tag::StripByteCounts,
+    Tag::MinSampleValue,
+    Tag::MaxSampleValue,
+    Tag::XResolution,
+    Tag::YResolution,
+    Tag::PlanarConfiguration,
+    Tag::ResolutionUnit,
+    Tag::Predictor,
+    Tag::ColorMap,
+    Tag::TileWidth,
+    Tag::TileLength,
+    Tag::TileOffsets,
+    Tag::TileByteCounts,
+    Tag::ExtraSamples,
+    Tag::SampleFormat,
+    Tag::SMinSampleValue,
+    Tag::SMaxSampleValue,
+    Tag::JPEGTables,
+    Tag::ChromaSubsampling,
+    Tag::ChromaPositioning,
+];
+
+/// TransferFunction, WhitePoint and PrimaryChromaticities: a colour description
+/// without an ICC profile. Dropping them changes how the colours look.
+const COLOUR_TAGS: [u16; 3] = [301, 318, 319];
+
+/// The metadata of a TIFF, read with the tiff crate itself. The image crate's
+/// TIFF decoder is no use here: it sizes the limit for tag values by the pixel
+/// data, so on a small image it silently drops the ICC profile and fails on an
+/// XMP packet.
+///
+/// A TIFF keeps EXIF and the like as tags of its first directory, not as a block
+/// we could copy, and there are far more of them than anyone could list. So the
+/// check is turned around: every tag of the directory is looked at (the entry
+/// table only, no values), and anything except `STRUCTURE_TAGS`, the ICC
+/// profile, an orientation of 1 ("upright", the default) and the colour tags
+/// counts as descriptive metadata, which is then uncarried. The colour tags make
+/// the colour profile uncarried whatever `keep_metadata` says.
+fn tiff_metadata(path: &Path, keep_metadata: bool) -> Result<SourceMeta, String> {
+    let file = File::open(path).map_err(|_| OPEN_ERROR.to_string())?;
+    let mut decoder =
+        tiff::decoder::Decoder::new(BufReader::new(file)).map_err(|_| READ_ERROR.to_string())?;
+    let icc = match decoder.find_tag(Tag::IccProfile) {
+        Ok(None) => None,
+        Ok(Some(profile)) => Some(profile.into_u8_vec().map_err(|_| READ_ERROR.to_string())?),
+        Err(_) => return Err(READ_ERROR.to_string()),
+    };
+    let mut meta = SourceMeta {
+        icc: non_empty(icc),
+        more_frames: decoder.more_images(),
+        ..SourceMeta::default()
+    };
+
+    let tags: Vec<Tag> = decoder
+        .image_ifd()
+        .directory()
+        .iter()
+        .map(|(tag, _)| tag)
+        .collect();
+    for tag in tags {
+        if tag == Tag::IccProfile || STRUCTURE_TAGS.contains(&tag) {
+            continue;
+        }
+        if COLOUR_TAGS.contains(&tag.to_u16()) {
+            meta.icc_uncarried = true;
+        } else if tag == Tag::Orientation {
+            let rotated = match decoder.find_tag(Tag::Orientation) {
+                Ok(Some(value)) => value.into_u16().map_or(true, |o| o != 1),
+                _ => true,
+            };
+            meta.uncarried |= keep_metadata && rotated;
+        } else {
+            meta.uncarried |= keep_metadata;
+        }
+    }
+    Ok(meta)
+}
+
+/// `true` if a BMP names a colour profile, embedded or linked. Only the
+/// `BITMAPV5HEADER` (124 bytes) has the colour space type (`bV5CSType`) that
+/// can say so; the image crate does not read the profile, so it is lost.
+fn bmp_has_profile(path: &Path) -> Result<bool, String> {
+    const FILE_HEADER_LEN: usize = 14;
+    const V5_HEADER_LEN: u32 = 124;
+    const CS_TYPE_AT: usize = FILE_HEADER_LEN + 56;
+    const PROFILE_LINKED: u32 = 0x4C49_4E4B; // 'LINK'
+    const PROFILE_EMBEDDED: u32 = 0x4D42_4544; // 'MBED'
+
+    let mut head = Vec::new();
+    File::open(path)
+        .map_err(|_| OPEN_ERROR.to_string())?
+        .take(CS_TYPE_AT as u64 + 4)
+        .read_to_end(&mut head)
+        .map_err(|_| READ_ERROR.to_string())?;
+    let word = |at: usize| {
+        head.get(at..at + 4)
+            .map(|b| u32::from_le_bytes(b.try_into().unwrap()))
+    };
+    if word(FILE_HEADER_LEN) != Some(V5_HEADER_LEN) {
+        return Ok(false);
+    }
+    Ok(matches!(
+        word(CS_TYPE_AT),
+        Some(PROFILE_LINKED | PROFILE_EMBEDDED)
+    ))
+}
+
+/// `true` if a WebP is an animation with more than one frame (`ANMF` chunk).
+fn webp_has_more_frames(path: &Path) -> Result<bool, String> {
+    let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
+    let mut riff = [0u8; 12];
+    input
+        .read_exact(&mut riff)
+        .map_err(|_| READ_ERROR.to_string())?;
+    if &riff[..4] != b"RIFF" || &riff[8..] != b"WEBP" {
+        return Err(READ_ERROR.to_string());
+    }
+    let mut frames = 0;
+    loop {
+        let mut header = [0u8; 8];
+        match input.read_exact(&mut header) {
+            Ok(()) => {}
+            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(false),
+            Err(_) => return Err(READ_ERROR.to_string()),
+        }
+        if &header[..4] == b"ANMF" {
+            frames += 1;
+            if frames > 1 {
+                return Ok(true);
+            }
+        }
+        // Chunk data is padded to an even length.
+        let size = i64::from(u32::from_le_bytes(header[4..].try_into().unwrap()));
+        input
+            .seek_relative(size + (size & 1))
+            .map_err(|_| READ_ERROR.to_string())?;
+    }
+}
+
+// ------------------------------------------------------------------ writing
+
+/// Runs `write` on a buffered new file at `dst` and flushes it. On any error
+/// the half-written file is removed again.
+fn write_file(
+    dst: &Path,
+    write: impl FnOnce(&mut BufWriter<File>) -> Result<(), String>,
+) -> Result<(), String> {
+    let mut out = BufWriter::new(File::create(dst).map_err(|_| WRITE_ERROR.to_string())?);
+    let result = write(&mut out).and_then(|()| out.flush().map_err(|_| WRITE_ERROR.to_string()));
+    drop(out);
+    if result.is_err() {
+        let _ = fs::remove_file(dst);
+    }
+    result
+}
+
+/// `eXIf` comes before the image data, where cjxl looks for it, and after `iCCP`.
+fn write_png(
+    image: &DynamicImage,
+    dst: &Path,
+    icc: Option<Vec<u8>>,
+    exif: Option<Vec<u8>>,
+) -> Result<(), String> {
+    write_file(dst, |out| {
+        // A temporary file for cjxl: fast to write matters more than small.
+        let mut encoder =
+            PngEncoder::new_with_quality(out, CompressionType::Fast, FilterType::Adaptive);
+        if let Some(icc) = icc {
+            encoder
+                .set_icc_profile(icc)
+                .map_err(|_| WRITE_ERROR.to_string())?;
+        }
+        if let Some(exif) = exif {
+            encoder
+                .set_exif_metadata(exif)
+                .map_err(|_| WRITE_ERROR.to_string())?;
+        }
+        image
+            .write_with_encoder(encoder)
+            .map_err(|_| WRITE_ERROR.to_string())
+    })
+}
+
+/// Writes a lossless TIFF. Returns whether the ICC profile went into it.
+fn write_tiff(image: DynamicImage, icc: Option<Vec<u8>>, dst: &Path) -> Result<bool, String> {
+    // The TIFF encoder has no gray + alpha, so that becomes RGBA. A profile for
+    // gray data does not fit RGB data, so it is not written then.
+    let (image, icc) = match image.color() {
+        ColorType::La8 => (image.to_rgba8().into(), None),
+        ColorType::La16 => (image.to_rgba16().into(), None),
+        _ => (image, icc),
+    };
+    let carried = icc.is_some();
+    write_file(dst, |out| {
+        let mut encoder = TiffEncoder::new(out);
+        if let Some(icc) = icc {
+            encoder
+                .set_icc_profile(icc)
+                .map_err(|_| WRITE_ERROR.to_string())?;
+        }
+        image
+            .write_with_encoder(encoder)
+            .map_err(|_| WRITE_ERROR.to_string())
+    })?;
+    Ok(carried)
+}
+
+fn write_webp(image: DynamicImage, dst: &Path) -> Result<(), String> {
+    let (width, height) = (image.width(), image.height());
+    if width > WEBP_MAX_SIDE || height > WEBP_MAX_SIDE {
+        return Err(format!(
+            "Bild ist für WebP zu groß (höchstens {WEBP_MAX_SIDE} Pixel pro Seite)"
+        ));
+    }
+    // WebP is 8 bit, with or without alpha.
+    let (rgb, rgba);
+    let encoder = if image.color().has_alpha() {
+        rgba = image.to_rgba8();
+        webp::Encoder::from_rgba(rgba.as_raw(), width, height)
+    } else {
+        rgb = image.to_rgb8();
+        webp::Encoder::from_rgb(rgb.as_raw(), width, height)
+    };
+    let data = encoder
+        .encode_simple(false, WEBP_QUALITY)
+        .map_err(|_| "WebP-Kodierung fehlgeschlagen".to_string())?;
+    write_file(dst, |out| {
+        out.write_all(&data).map_err(|_| WRITE_ERROR.to_string())
+    })
+}
+
+// ---------------------------------------------------------- PNG chunk level
+
+const PNG_SIGNATURE: [u8; 8] = *b"\x89PNG\r\n\x1a\n";
+/// A PNG text keyword has at most 79 bytes, followed by a NUL.
+const KEYWORD_WINDOW: usize = 80;
+/// PNG chunks are shorter than 2^31 bytes.
+const MAX_CHUNK_LEN: u32 = i32::MAX as u32;
+
+/// What a PNG holds that matters when it is converted: what TIFF and WebP
+/// output cannot take, and what cjxl does not carry into a JXL.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct PngMeta {
+    /// EXIF: an `eXIf` chunk or a "Raw profile type exif" text chunk.
+    pub exif: bool,
+    /// XMP: a "Raw profile type xmp" or "XML:com.adobe.xmp" text chunk.
+    pub xmp: bool,
+    pub icc: bool,
+    /// An animated PNG (APNG) with more than one frame.
+    pub animated: bool,
+    /// A text chunk (`tEXt`, `zTXt`, `iTXt`) other than the EXIF and XMP ones:
+    /// title, author, comment, IPTC ... cjxl v0.12.0 drops them
+    /// (docs/libjxl-notes.md). Display chunks such as `pHYs`, `tIME` or
+    /// `bKGD` are dropped too but do not count (Ruling R20).
+    pub other_metadata: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Payload {
+    Exif,
+    Xmp,
+}
+
+/// The start of a chunk: its 8-byte header and, for the types that can carry
+/// EXIF or XMP (keyword first) and for the animation control chunk, the first
+/// bytes of its data.
+struct ChunkStart {
+    header: [u8; 8],
+    head: Vec<u8>,
+}
+
+impl ChunkStart {
+    fn kind(&self) -> [u8; 4] {
+        self.header[4..].try_into().unwrap()
+    }
+
+    fn len(&self) -> u64 {
+        u32::from_be_bytes(self.header[..4].try_into().unwrap()).into()
+    }
+
+    /// Bytes of the chunk not read yet: the rest of the data and the CRC.
+    fn remaining(&self) -> u64 {
+        self.len() + 4 - self.head.len() as u64
+    }
+
+    fn payload(&self) -> Option<Payload> {
+        match &self.kind() {
+            b"eXIf" => Some(Payload::Exif),
+            b"tEXt" | b"zTXt" | b"iTXt" => {
+                let keyword = &self.head[..self.head.iter().position(|&b| b == 0)?];
+                match keyword {
+                    b"Raw profile type exif" => Some(Payload::Exif),
+                    b"Raw profile type xmp" | b"XML:com.adobe.xmp" => Some(Payload::Xmp),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+fn read_chunk_start(input: &mut impl Read) -> io::Result<ChunkStart> {
+    let mut header = [0u8; 8];
+    input.read_exact(&mut header)?;
+    let len = u32::from_be_bytes(header[..4].try_into().unwrap());
+    if len > MAX_CHUNK_LEN {
+        return Err(io::ErrorKind::InvalidData.into());
+    }
+    let mut head = Vec::new();
+    if matches!(
+        &header[4..],
+        b"eXIf" | b"tEXt" | b"zTXt" | b"iTXt" | b"acTL"
+    ) {
+        head = vec![0; (len as usize).min(KEYWORD_WINDOW)];
+        input.read_exact(&mut head)?;
+    }
+    Ok(ChunkStart { header, head })
+}
+
+fn read_signature(input: &mut impl Read) -> io::Result<()> {
+    let mut signature = [0u8; 8];
+    input.read_exact(&mut signature)?;
+    if signature == PNG_SIGNATURE {
+        Ok(())
+    } else {
+        Err(io::ErrorKind::InvalidData.into())
+    }
+}
+
+/// Reads the chunk list of a PNG (not the image data). German error texts.
+pub fn scan_png(path: &Path) -> Result<PngMeta, String> {
+    let mut input = BufReader::new(File::open(path).map_err(|_| OPEN_ERROR.to_string())?);
+    scan(&mut input).map_err(|_| READ_ERROR.to_string())
+}
+
+/// Walks the chunks up to `IEND`, skipping over the data.
+fn scan(input: &mut BufReader<File>) -> io::Result<PngMeta> {
+    read_signature(input)?;
+    let mut found = PngMeta::default();
+    loop {
+        let chunk = read_chunk_start(input)?;
+        match (&chunk.kind(), chunk.payload()) {
+            (b"IEND", _) => return Ok(found),
+            (b"iCCP", _) => found.icc = true,
+            // Animation control: the number of frames, 4 bytes, comes first.
+            (b"acTL", _) => {
+                let frames = chunk
+                    .head
+                    .first_chunk::<4>()
+                    .map(|b| u32::from_be_bytes(*b));
+                found.animated = frames > Some(1);
+            }
+            (_, Some(Payload::Exif)) => found.exif = true,
+            (_, Some(Payload::Xmp)) => found.xmp = true,
+            (b"tEXt" | b"zTXt" | b"iTXt", None) => found.other_metadata = true,
+            _ => {}
+        }
+        input.seek_relative(chunk.remaining() as i64)?;
+    }
+}
+
+/// Copies a PNG up to and including `IEND`, leaving out the chunks that carry
+/// EXIF or XMP. Fails with `UnexpectedEof` if the file ends early.
+fn copy_without_metadata(input: &mut BufReader<File>, out: &mut impl Write) -> io::Result<()> {
+    read_signature(input)?;
+    out.write_all(&PNG_SIGNATURE)?;
+    loop {
+        let chunk = read_chunk_start(input)?;
+        if chunk.payload().is_some() {
+            input.seek_relative(chunk.remaining() as i64)?;
+            continue;
+        }
+        out.write_all(&chunk.header)?;
+        out.write_all(&chunk.head)?;
+        let remaining = chunk.remaining();
+        if io::copy(&mut input.by_ref().take(remaining), out)? != remaining {
+            return Err(io::ErrorKind::UnexpectedEof.into());
+        }
+        if &chunk.kind() == b"IEND" {
+            return Ok(());
+        }
+    }
+}
