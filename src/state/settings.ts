@@ -1,12 +1,13 @@
-import type { JobSettings, Mode, OutputFormat, OutputLocation } from "../api/types";
+import type { JobSettings, Lang, Mode, OutputFormat, OutputLocation } from "../api/types";
 
 export type Preset = "ll" | "hi" | "bal" | "sm";
 
-export const PRESETS: Record<Preset, { label: string; distance: number; effort: number; quality: number }> = {
-  ll: { label: "Verlustfrei", distance: 0, effort: 7, quality: 100 },
-  hi: { label: "Hohe Qualität", distance: 0.5, effort: 7, quality: 95 },
-  bal: { label: "Ausgewogen", distance: 1.2, effort: 7, quality: 88 },
-  sm: { label: "Klein", distance: 2.6, effort: 8, quality: 72 },
+/** The labels are in the catalog (`preset.<id>.label`). */
+export const PRESETS: Record<Preset, { distance: number; effort: number; quality: number }> = {
+  ll: { distance: 0, effort: 7, quality: 100 },
+  hi: { distance: 0.5, effort: 7, quality: 95 },
+  bal: { distance: 1.2, effort: 7, quality: 88 },
+  sm: { distance: 2.6, effort: 8, quality: 72 },
 };
 
 export const EFFORT_NAMES = [
@@ -37,6 +38,8 @@ export interface UiSettings {
   bitDepth: 8 | 16;
   output: OutputLocation;
   theme: "light" | "dark" | null;
+  /** `null`: follow the Windows display language. */
+  lang: Lang | null;
 }
 
 export const DEFAULT_SETTINGS: UiSettings = {
@@ -54,6 +57,7 @@ export const DEFAULT_SETTINGS: UiSettings = {
   bitDepth: 16,
   output: { kind: "next" },
   theme: null,
+  lang: null,
 };
 
 /** Expert slider: d = 0,1 + (100 − q) · 0,09; q = 100 is lossless (d = 0). */
@@ -118,5 +122,6 @@ export function restoreSettings(saved: unknown): UiSettings {
     bitDepth: pick<8 | 16>(s.bitDepth, [8, 16], d.bitDepth),
     output,
     theme: pick<UiSettings["theme"]>(s.theme, ["light", "dark", null], d.theme),
+    lang: pick<UiSettings["lang"]>(s.lang, ["de", "en", null], d.lang),
   };
 }

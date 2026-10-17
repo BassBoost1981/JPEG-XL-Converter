@@ -12,6 +12,7 @@ function setSettings(patch: Partial<UiSettings>, run: "idle" | "running" | "paus
 
 beforeEach(() => {
   vi.spyOn(backend, "saveSettings").mockResolvedValue();
+  useApp.setState({ systemLang: "de" });
   setSettings({});
 });
 
@@ -35,6 +36,14 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("switch", { name: /JPEGs verlustfrei transkodieren/ })).toBeChecked();
     expect(screen.getByRole("switch", { name: /Metadaten behalten/ })).toBeChecked();
     expect(screen.getByRole("switch", { name: /Originale nach Prüfung in den Papierkorb/ })).not.toBeChecked();
+  });
+
+  it("Stufennamen kommen aus dem Katalog der gewählten Sprache", () => {
+    setSettings({ lang: "en" });
+    render(<SettingsPanel />);
+    for (const name of ["Lossless", "High quality", "Balanced", "Small"]) {
+      expect(screen.getByRole("radio", { name: new RegExp(name) })).toBeInTheDocument();
+    }
   });
 
   it("Klick auf eine Stufe setzt die Voreinstellung", async () => {
@@ -138,6 +147,7 @@ describe("SettingsPanel", () => {
       await u.click(screen.getByRole("button", { name: /Ausgabeordner/ }));
       await u.click(await screen.findByRole("menuitem", { name: "Ordner wählen …" }));
       expect(pick).toHaveBeenCalledTimes(1);
+      expect(pick).toHaveBeenCalledWith("Ordner auswählen");
       expect(useApp.getState().settings.output).toEqual({ kind: "folder", path: "D:\\Ausgabe" });
       expect(await screen.findByText("D:\\Ausgabe")).toBeInTheDocument();
     });

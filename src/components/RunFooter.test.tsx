@@ -15,6 +15,7 @@ function row(id: number, status: ItemStatus = "waiting", extra: Partial<Row> = {
     entry: { path: `C:\\Bilder\\Foto_${id}.jpg`, root: null, kind: "jpeg", size: 10 * MB, width: 4000, height: 3000 },
     status,
     progress: status === "waiting" ? 0 : 100,
+    notes: [],
     ...extra,
   };
 }
@@ -24,11 +25,12 @@ const actions = { start: vi.fn(), pause: vi.fn(), resume: vi.fn(), retryFailed: 
 function setup(rows: Row[], extra: Partial<ReturnType<typeof useApp.getState>> = {}) {
   useApp.setState({
     settings: DEFAULT_SETTINGS,
+    systemLang: "de",
     queues: { enc: rows, dec: [] },
     run: "idle",
     pauseReason: null,
     summary: null,
-    tools: { ok: true, cjxlVersion: "0.12", djxlVersion: "0.12", message: null },
+    tools: { ok: true, cjxlVersion: "0.12", djxlVersion: "0.12", messages: [] },
     ...actions,
     ...extra,
   });
@@ -45,6 +47,19 @@ describe("RunFooter", () => {
     render(<RunFooter />);
     expect(screen.getByText("Ersparnis erscheint nach der ersten fertigen Datei")).toBeInTheDocument();
     expect(screen.getByText("–")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "2 Dateien in JPEG XL konvertieren" })).toBeEnabled();
+  });
+
+  it("folgt der gewählten Sprache, sonst der Windows-Sprache", () => {
+    setup([row(1), row(2)], { systemLang: "en" });
+    const a = render(<RunFooter />);
+    expect(screen.getByText("Savings appear after the first finished file")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Convert 2 files to JPEG XL" })).toBeEnabled();
+    a.unmount();
+
+    setup([row(1), row(2)], { systemLang: "en", settings: { ...DEFAULT_SETTINGS, lang: "de" } });
+    render(<RunFooter />);
+    expect(screen.getByText("Ersparnis erscheint nach der ersten fertigen Datei")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "2 Dateien in JPEG XL konvertieren" })).toBeEnabled();
   });
 
@@ -92,7 +107,8 @@ describe("RunFooter", () => {
   });
 
   it("sperrt den Knopf ohne Werkzeuge (R1), ohne wartende Dateien und bei „Alles erledigt“", () => {
-    setup([row(1)], { tools: { ok: false, cjxlVersion: null, djxlVersion: null, message: "fehlt" } });
+    setup([row(1)], { tools: { ok: false, cjxlVersion: null, djxlVersion: null, messages: [{ key: "tool.noResponse", params: { name: "cjxl.exe" } }] },
+    });
     const a = render(<RunFooter />);
     expect(screen.getByRole("button", { name: "1 Datei in JPEG XL konvertieren" })).toBeDisabled();
     a.unmount();

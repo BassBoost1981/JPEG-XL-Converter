@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { DEFAULT_SETTINGS, distanceFromQuality, enterExpert, restoreSettings, toJobSettings } from "./settings";
+import { DEFAULT_SETTINGS, distanceFromQuality, enterExpert, PRESETS, restoreSettings, toJobSettings } from "./settings";
 
 describe("distanceFromQuality", () => {
   it("d = 0,1 + (100 − q) · 0,09, q = 100 → 0", () => {
@@ -46,6 +46,12 @@ describe("toJobSettings", () => {
   });
 });
 
+describe("PRESETS", () => {
+  it("tragen nur Zahlen, die Beschriftung kommt aus dem Katalog", () => {
+    for (const p of Object.values(PRESETS)) expect(Object.keys(p).sort()).toEqual(["distance", "effort", "quality"]);
+  });
+});
+
 describe("enterExpert", () => {
   it("übernimmt die Werte der Voreinstellung", () => {
     expect(enterExpert({ ...DEFAULT_SETTINGS, preset: "bal" })).toMatchObject({
@@ -71,6 +77,7 @@ describe("restoreSettings", () => {
       bitDepth: 8,
       output: { kind: "folder", path: "D:\Ziel" },
       theme: "dark",
+      lang: "en",
     };
     expect(restoreSettings(saved)).toEqual(saved);
   });
@@ -88,11 +95,28 @@ describe("restoreSettings", () => {
       bitDepth: 12,
       output: { kind: "folder" },
       theme: "lila",
+      lang: "fr",
       fremd: 1,
     };
     const s = restoreSettings(corrupt);
     expect(s).toEqual({ ...DEFAULT_SETTINGS, lossless: false });
     expect(() => toJobSettings(s)).not.toThrow();
+  });
+
+  it("lang: de, en und null bleiben, alles andere wird null (Windows-Sprache)", () => {
+    expect(DEFAULT_SETTINGS.lang).toBeNull();
+    expect(restoreSettings({ lang: "de" }).lang).toBe("de");
+    expect(restoreSettings({ lang: "en" }).lang).toBe("en");
+    expect(restoreSettings({ lang: null }).lang).toBeNull();
+    for (const bad of ["fr", "EN", "", 1, true, {}, undefined]) expect(restoreSettings({ lang: bad }).lang).toBeNull();
+    // Old settings file without the field.
+    expect(restoreSettings({ preset: "hi" })).toMatchObject({ preset: "hi", lang: null });
+  });
+
+  it("ein ungültiges lang lässt die übrigen gültigen Felder stehen", () => {
+    expect(restoreSettings({ lang: "fr" }).lang).toBeNull();
+    expect(restoreSettings({ lang: "en", preset: "xx" })).toMatchObject({ lang: "en", preset: "ll" });
+    expect(restoreSettings({ lang: "fr", preset: "sm", effort: 3 })).toMatchObject({ lang: null, preset: "sm", effort: 3 });
   });
 
   it("verträgt Unsinn statt eines Objekts", () => {

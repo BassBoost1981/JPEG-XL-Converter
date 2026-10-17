@@ -5,7 +5,18 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { open } from "@tauri-apps/plugin-dialog";
 import type { Backend } from "./backend";
 import type { UiSettings } from "../state/settings";
-import type { AddResult, ItemEvent, JobSettings, Mode, PauseReason, PreviewDto, RunSummary, ToolStatus } from "./types";
+import type {
+  AddResult,
+  ItemEvent,
+  JobSettings,
+  Lang,
+  Mode,
+  PauseReason,
+  PreviewDto,
+  RunSummary,
+  StorageInfo,
+  ToolStatus,
+} from "./types";
 
 const ENC_EXTENSIONS = ["jpg", "jpeg", "png", "gif", "tif", "tiff", "webp", "bmp"];
 
@@ -24,8 +35,9 @@ export const tauriBackend: Backend = {
   checkTools: () => invoke<ToolStatus>("check_tools"),
   addPaths: (paths, mode) => invoke<AddResult>("add_paths", { paths, mode }),
   clearQueue: (mode) => invoke<void>("clear_queue", { mode }),
-  startRun: (mode: Mode, settings: JobSettings) => invoke<void>("start_run", { mode, settings }),
-  retryFailed: (mode: Mode, settings: JobSettings) => invoke<void>("retry_failed", { mode, settings }),
+  startRun: (mode: Mode, settings: JobSettings, lang: Lang) => invoke<void>("start_run", { mode, settings, lang }),
+  retryFailed: (mode: Mode, settings: JobSettings, lang: Lang) =>
+    invoke<void>("retry_failed", { mode, settings, lang }),
   pauseRun: () => invoke<void>("pause_run"),
   resumeRun: () => invoke<void>("resume_run"),
   cancelRun: () => invoke<void>("cancel_run"),
@@ -35,17 +47,19 @@ export const tauriBackend: Backend = {
   loadSettings: () => invoke<UiSettings | null>("load_settings"),
   saveSettings: (value: UiSettings) => invoke<void>("save_settings", { value }),
   openLog: (path) => invoke<void>("open_log", { path }),
+  systemLocale: () => invoke<string | null>("system_locale"),
+  storageInfo: () => invoke<StorageInfo>("storage_info"),
 
-  async pickFiles(mode) {
+  async pickFiles(mode, labels) {
     const filters =
       mode === "enc"
-        ? [{ name: "Bilder", extensions: ENC_EXTENSIONS }]
+        ? [{ name: labels.filterImages, extensions: ENC_EXTENSIONS }]
         : [{ name: "JPEG XL", extensions: ["jxl"] }];
-    const picked = await open({ multiple: true, directory: false, filters });
+    const picked = await open({ multiple: true, directory: false, filters, title: labels.title });
     return picked ?? [];
   },
-  async pickFolder() {
-    const picked = await open({ multiple: false, directory: true });
+  async pickFolder(title) {
+    const picked = await open({ multiple: false, directory: true, title });
     return picked ?? null;
   },
 
@@ -62,6 +76,7 @@ export const tauriBackend: Backend = {
   minimize: () => void getCurrentWindow().minimize(),
   toggleMaximize: () => void getCurrentWindow().toggleMaximize(),
   close: () => void getCurrentWindow().close(),
+  setTitle: (title) => void getCurrentWindow().setTitle(title),
   onCloseRequested: (cb) =>
     disposer(
       getCurrentWindow().onCloseRequested((e) => {

@@ -2,6 +2,8 @@ import { Button } from "@heroui/react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useRef } from "react";
 import { backend } from "../api";
+import { msgText, translate } from "../i18n";
+import { useLang } from "../i18n/useT";
 import { formatCount } from "../lib/format";
 import { useApp } from "../state/store";
 import { GRID_COLUMNS, QueueRow, ROW_HEIGHT } from "./QueueRow";
@@ -17,6 +19,7 @@ export function QueuePanel() {
   const running = useApp((s) => s.run === "running" || s.run === "paused");
   const notice = useApp((s) => s.notice);
   const select = useApp((s) => s.select);
+  const lang = useLang();
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const virtualizer = useVirtualizer({
@@ -30,9 +33,15 @@ export function QueuePanel() {
   const add = async (paths: string[]) => {
     if (paths.length > 0) await useApp.getState().addPaths(paths);
   };
-  const pickFiles = async () => add(await backend.pickFiles(mode));
+  const pickFiles = async () =>
+    add(
+      await backend.pickFiles(mode, {
+        title: translate(lang, "dialog.pickFiles"),
+        filterImages: translate(lang, "dialog.filterImages"),
+      }),
+    );
   const pickFolder = async () => {
-    const folder = await backend.pickFolder();
+    const folder = await backend.pickFolder(translate(lang, "dialog.pickFolder"));
     if (folder) await add([folder]);
   };
 
@@ -41,7 +50,7 @@ export function QueuePanel() {
       <div className="flex flex-none items-center gap-2 px-4 pb-2.5 pt-3.5">
         <span className="text-[15px] font-semibold">Warteschlange</span>
         <span className="rounded-full bg-[var(--d100)] px-2 py-0.5 text-xs text-[var(--muted)]">
-          {rows.length === 1 ? "1 Datei" : `${formatCount(rows.length)} Dateien`}
+          {rows.length === 1 ? "1 Datei" : `${formatCount(rows.length, lang)} Dateien`}
         </span>
         <div className="flex-1" />
         <Button
@@ -70,7 +79,7 @@ export function QueuePanel() {
 
       {notice && (
         <div role="status" className="mx-3 mb-2 rounded-lg bg-[var(--line)] px-3 py-2 text-xs">
-          {notice}
+          {msgText(lang, notice)}
         </div>
       )}
 

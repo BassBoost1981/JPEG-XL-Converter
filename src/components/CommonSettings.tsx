@@ -1,18 +1,20 @@
 import { Dropdown } from "@heroui/react";
 import { backend } from "../api";
+import { useT } from "../i18n/useT";
 import { useApp } from "../state/store";
 import { SwitchRow } from "./SettingsParts";
 
 export function CommonSettings({ locked }: { locked: boolean }) {
   const s = useApp((st) => st.settings);
   const update = useApp((st) => st.updateSettings);
+  const t = useT();
 
   const onAction = async (key: string | number) => {
     if (key === "next") {
       update({ output: { kind: "next" } });
       return;
     }
-    const path = await backend.pickFolder();
+    const path = await backend.pickFolder(t("dialog.pickFolder"));
     if (path) update({ output: { kind: "folder", path } });
   };
 

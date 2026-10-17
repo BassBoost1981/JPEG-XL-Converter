@@ -12,6 +12,7 @@ function row(id: number, extra: Partial<Row> = {}): Row {
     entry: { path: `C:\\Bilder\\Foto_${id}.jpg`, root: null, kind: "jpeg", size: 7_130_000, width: 4000, height: 3000 },
     status: "waiting",
     progress: 0,
+    notes: [],
     ...extra,
   };
 }
@@ -27,6 +28,7 @@ function setup(rows: Row[] = [row(1)], settings = DEFAULT_SETTINGS) {
 }
 
 beforeEach(() => {
+  useApp.setState({ systemLang: "de" });
   vi.useFakeTimers();
   vi.spyOn(backend, "preview").mockResolvedValue(dto);
 });

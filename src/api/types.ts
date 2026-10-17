@@ -1,5 +1,8 @@
 // TypeScript counterparts of src-tauri/src/engine/types.rs and the DTOs of commands.rs.
 // Serde shapes: camelCase fields, lower-case string enums.
+import type { Lang, Msg } from "../i18n";
+
+export type { Lang, Msg };
 
 export type Mode = "enc" | "dec";
 export type InputKind = "jpeg" | "png" | "gif" | "tiff" | "webp" | "bmp" | "jxl";
@@ -54,7 +57,7 @@ export interface ItemEvent {
   status: ItemStatus;
   progress: number;
   outSize: number | null;
-  note: string | null;
+  notes: Msg[];
 }
 
 export interface RunSummary {
@@ -72,7 +75,11 @@ export interface ToolStatus {
   ok: boolean;
   cjxlVersion: string | null;
   djxlVersion: string | null;
-  message: string | null;
+  messages: Msg[];
+}
+
+export interface StorageInfo {
+  readOnly: boolean;
 }
 
 export interface AddResult {

@@ -1,3 +1,4 @@
+import { useT } from "../i18n/useT";
 import { formatDistance } from "../lib/format";
 import { distanceFromQuality, EFFORT_NAMES, PRESETS, type Preset } from "../state/settings";
 import { useApp } from "../state/store";
@@ -13,6 +14,7 @@ const HINTS: Record<Preset, string> = {
 export function EncodeSettings({ locked }: { locked: boolean }) {
   const s = useApp((st) => st.settings);
   const update = useApp((st) => st.updateSettings);
+  const t = useT();
 
   return (
     <div className="contents">
@@ -53,7 +55,7 @@ export function EncodeSettings({ locked }: { locked: boolean }) {
             <OptionCard
               key={p}
               layout="row"
-              label={PRESETS[p].label}
+              label={t(`preset.${p}.label`)}
               hint={HINTS[p]}
               checked={s.preset === p}
               disabled={locked}

@@ -15,6 +15,7 @@ function row(id: number, extra: Partial<Row> = {}): Row {
     entry: { path: `C:\\Bilder\\Foto_${id}.jpg`, root: null, kind: "jpeg", size: 1024 * 1024, width: 4000, height: 3000 },
     status: "waiting",
     progress: 0,
+    notes: [],
     ...extra,
   };
 }
@@ -30,6 +31,7 @@ beforeEach(() => {
   }
   useApp.setState({
     settings: DEFAULT_SETTINGS,
+    systemLang: "de",
     queues: { enc: [], dec: [] },
     selected: { enc: null, dec: null },
     run: "idle",
@@ -97,10 +99,10 @@ describe("QueuePanel", () => {
           row(1),
           row(2, { status: "running", progress: 42 }),
           row(3, { status: "done", progress: 100, outSize: 1 }),
-          row(4, { status: "doneWithNote", progress: 100, outSize: 1, note: "Original blieb liegen" }),
-          row(5, { status: "skipped", progress: 100, note: "Zieldatei existiert bereits" }),
-          row(6, { status: "error", progress: 0, note: "Datei fehlt" }),
-          row(7, { status: "verifyFailed", progress: 100, note: "Abweichung" }),
+          row(4, { status: "doneWithNote", progress: 100, outSize: 1, notes: [{ key: "note.keptNoRecycleBin" }] }),
+          row(5, { status: "skipped", progress: 100, notes: [{ key: "error.targetExists" }] }),
+          row(6, { status: "error", progress: 0, notes: [{ key: "error.cannotOpen" }] }),
+          row(7, { status: "verifyFailed", progress: 100, notes: [{ key: "error.pixelsDiffer" }] }),
         ],
         dec: [],
       },
@@ -112,11 +114,32 @@ describe("QueuePanel", () => {
   });
 
   it("zeigt den Fehlertext im Tooltip", async () => {
-    useApp.setState({ queues: { enc: [row(6, { status: "error", note: "Datei fehlt" })], dec: [] } });
+    useApp.setState({ queues: { enc: [row(6, { status: "error", notes: [{ key: "error.cannotOpen" }] })], dec: [] } });
     render(<QueuePanel />);
     // Keyboard focus: Dateien, Ordner hinzufügen, Leeren, then the status chip.
     for (let i = 0; i < 4; i++) await userEvent.tab();
-    expect(await screen.findByRole("tooltip", {}, { timeout: 3000 })).toHaveTextContent("Datei fehlt");
+    expect(await screen.findByRole("tooltip", {}, { timeout: 3000 })).toHaveTextContent("Datei lässt sich nicht öffnen");
+  });
+
+  it("zeigt mehrere Hinweise und übersetzt sie in die gewählte Sprache", async () => {
+    useApp.setState({
+      settings: { ...DEFAULT_SETTINGS, lang: "en" },
+      queues: {
+        enc: [
+          row(6, {
+            status: "doneWithNote",
+            outSize: 1,
+            notes: [{ key: "note.keptRecycleFailed", params: { reason: { key: "reason.inUse" } } }, { key: "note.datesNotKept" }],
+          }),
+        ],
+        dec: [],
+      },
+    });
+    render(<QueuePanel />);
+    for (let i = 0; i < 4; i++) await userEvent.tab();
+    const tip = await screen.findByRole("tooltip", {}, { timeout: 3000 });
+    expect(tip).toHaveTextContent("Original kept: Recycle Bin not possible (File is in use by another program)");
+    expect(tip).toHaveTextContent("File date not carried over");
   });
 
   it("sperrt „Leeren“ während eines Laufs", () => {
@@ -196,8 +219,8 @@ describe("QueuePanel", () => {
     await vi.waitFor(() => expect(add).toHaveBeenCalledWith(["C:\\a.jpg"], "enc"));
     await userEvent.click(screen.getByRole("button", { name: "Ordner hinzufügen" }));
     await vi.waitFor(() => expect(add).toHaveBeenCalledWith(["C:\\Bilder"], "enc"));
-    expect(files).toHaveBeenCalledWith("enc");
-    expect(folder).toHaveBeenCalled();
+    expect(files).toHaveBeenCalledWith("enc", { title: "Dateien auswählen", filterImages: "Bilder" });
+    expect(folder).toHaveBeenCalledWith("Ordner auswählen");
   });
 
   it("zeigt bei abgelehnten Dateien den Hinweis mit Anzahl", async () => {
@@ -205,6 +228,17 @@ describe("QueuePanel", () => {
     render(<QueuePanel />);
     await useApp.getState().addPaths(["C:\\x.txt"]);
     expect(await screen.findByText("3 Dateien passen nicht zu diesem Modus und wurden nicht aufgenommen.")).toBeInTheDocument();
+  });
+
+  it("zeigt den Hinweis und die Dialogbeschriftungen auf Englisch", async () => {
+    useApp.setState({ settings: { ...DEFAULT_SETTINGS, lang: "en" } });
+    const files = vi.spyOn(backend, "pickFiles").mockResolvedValue([]);
+    vi.spyOn(backend, "addPaths").mockResolvedValue({ items: [], rejected: 3 });
+    render(<QueuePanel />);
+    await useApp.getState().addPaths(["C:\\x.txt"]);
+    expect(await screen.findByText("3 files do not match this mode and were not added.")).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Dateien" }));
+    await vi.waitFor(() => expect(files).toHaveBeenCalledWith("enc", { title: "Select files", filterImages: "Images" }));
   });
 
   it("nennt eine abgelehnte Datei im Singular", async () => {

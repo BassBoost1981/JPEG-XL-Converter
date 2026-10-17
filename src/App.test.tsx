@@ -36,7 +36,7 @@ afterEach(() => {
 
 describe("App", () => {
   it("zeigt den Werkzeug-Hinweis, wenn cjxl/djxl fehlen", async () => {
-    vi.spyOn(backend, "checkTools").mockResolvedValue({ ok: false, cjxlVersion: null, djxlVersion: null, message: null });
+    vi.spyOn(backend, "checkTools").mockResolvedValue({ ok: false, cjxlVersion: null, djxlVersion: null, messages: [] });
     render(<App />);
     expect(await screen.findByText("cjxl.exe oder djxl.exe fehlt neben dem Programm.")).toBeInTheDocument();
   });

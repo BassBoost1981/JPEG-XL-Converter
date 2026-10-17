@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../api";
 import type { InputKind, Mode, OutputFormat, PreviewDto } from "../api/types";
+import { useLang } from "../i18n/useT";
 import { formatDistance, formatSize } from "../lib/format";
 import { toJobSettings } from "../state/settings";
 import { useApp } from "../state/store";
@@ -32,6 +33,7 @@ const TAG = "pointer-events-none absolute top-2.5 rounded-full px-2.5 py-1 text-
 
 export function CompareSlider() {
   const mode: Mode = useApp((s) => s.settings.mode);
+  const lang = useLang();
   const settings = useApp((s) => s.settings);
   const row = useApp((s) => {
     const id = s.selected[s.settings.mode];
@@ -103,10 +105,10 @@ export function CompareSlider() {
 
   const finishedSize =
     row && (row.status === "done" || row.status === "doneWithNote") && row.outSize !== undefined
-      ? ` · ${formatSize(row.outSize)}`
+      ? ` · ${formatSize(row.outSize, lang)}`
       : "";
   const leftTag = row
-    ? `${mode === "enc" ? KIND_LABEL[row.entry.kind] : "JXL"} · ${formatSize(row.entry.size)}`
+    ? `${mode === "enc" ? KIND_LABEL[row.entry.kind] : "JXL"} · ${formatSize(row.entry.size, lang)}`
     : "";
   const rightTag = row
     ? mode === "enc"

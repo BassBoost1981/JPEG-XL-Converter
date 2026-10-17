@@ -2,6 +2,8 @@ import { Tooltip } from "@heroui/react";
 import { memo, useEffect, useState, type CSSProperties } from "react";
 import { backend } from "../api";
 import type { ItemStatus } from "../api/types";
+import { msgText } from "../i18n";
+import { useLang } from "../i18n/useT";
 import { formatDelta, formatSize } from "../lib/format";
 import type { Row } from "../state/store";
 
@@ -125,6 +127,7 @@ function InfoIcon() {
 }
 
 function StatusChip({ row }: { row: Row }) {
+  const lang = useLang();
   const l = look(row.status, row.progress);
   const chip = (
     <span
@@ -135,11 +138,15 @@ function StatusChip({ row }: { row: Row }) {
       {row.status === "doneWithNote" && <InfoIcon />}
     </span>
   );
-  if (!row.note) return chip;
+  if (row.notes.length === 0) return chip;
   return (
     <Tooltip>
       <Tooltip.Trigger>{chip}</Tooltip.Trigger>
-      <Tooltip.Content>{row.note}</Tooltip.Content>
+      <Tooltip.Content>
+        {row.notes.map((note, i) => (
+          <div key={i}>{msgText(lang, note)}</div>
+        ))}
+      </Tooltip.Content>
     </Tooltip>
   );
 }
@@ -162,6 +169,7 @@ interface Props {
 
 export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect }: Props) {
   const thumb = useThumb(row.id);
+  const lang = useLang();
   const { entry } = row;
   const name = baseName(entry.path);
   const isDone = row.status === "done" || row.status === "doneWithNote";
@@ -203,8 +211,8 @@ export const QueueRow = memo(function QueueRow({ row, selected, style, onSelect 
             {entry.width} × {entry.height}
           </div>
         </div>
-        <span className="text-[13px]">{formatSize(entry.size)}</span>
-        <span className="text-[13px]">{out === null ? "—" : formatSize(out)}</span>
+        <span className="text-[13px]">{formatSize(entry.size, lang)}</span>
+        <span className="text-[13px]">{out === null ? "—" : formatSize(out, lang)}</span>
         {out === null ? (
           <span className="justify-self-start rounded-full px-2 py-0.5 text-xs font-medium text-[var(--muted)]">—</span>
         ) : (

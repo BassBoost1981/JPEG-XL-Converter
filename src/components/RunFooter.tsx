@@ -1,6 +1,7 @@
 import { Button, ProgressBar } from "@heroui/react";
 import { backend } from "../api";
-import { ctaLabel, footerHint, formatDelta, summaryLine } from "../lib/format";
+import { useLang } from "../i18n/useT";
+import { ctaLabel, ctaState, footerHint, formatDelta, summaryLine } from "../lib/format";
 import { useApp } from "../state/store";
 
 const DONE = new Set(["done", "doneWithNote"]);
@@ -16,6 +17,7 @@ export function RunFooter() {
   const pauseReason = useApp((s) => s.pauseReason);
   const summary = useApp((s) => s.summary);
   const toolsMissing = useApp((s) => s.tools?.ok === false);
+  const lang = useLang();
   const { start, pause, resume, retryFailed } = useApp.getState();
 
   let done = 0;
@@ -44,12 +46,14 @@ export function RunFooter() {
   const hasResult = summary ? summary.done > 0 : done > 0;
   const saved = hasResult && shownIn > 0 ? formatDelta(shownIn, shownOut) : "–";
   const line = summary
-    ? summaryLine(summary)
-    : footerHint({ done, total: rows.length, bytesIn, bytesOut });
+    ? summaryLine(summary, lang)
+    : footerHint({ done, total: rows.length, bytesIn, bytesOut }, lang);
 
-  const label = ctaLabel({ mode, run, waiting, failed });
+  const cta = { mode, run, waiting, failed };
+  const state = ctaState(cta);
+  const label = ctaLabel(cta, lang);
   const canStart = run === "idle" || (run === "finished" && waiting > 0);
-  const disabled = toolsMissing || (run === "idle" && waiting === 0) || label === "Alles erledigt";
+  const disabled = toolsMissing || state === "empty" || state === "allDone";
 
   const onPress = () => {
     if (run === "running") void pause();
