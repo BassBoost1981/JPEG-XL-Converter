@@ -8,6 +8,7 @@ use std::process::{Child, Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use super::msg::{Msg, keys};
 use super::types::{CancelToken, ToolStatus};
 
 /// Process creation flag: no console window for the child.
@@ -49,18 +50,18 @@ impl Tools {
                 ok: true,
                 cjxl_version: Some(c),
                 djxl_version: Some(d),
-                message: None,
+                messages: Vec::new(),
             },
             (c, d) => {
-                let message = [&c, &d]
+                let messages = [&c, &d]
                     .into_iter()
                     .filter_map(|r| r.as_ref().err().cloned())
-                    .collect::<Vec<_>>();
+                    .collect();
                 ToolStatus {
                     ok: false,
                     cjxl_version: c.ok(),
                     djxl_version: d.ok(),
-                    message: Some(message.join(" ")),
+                    messages,
                 }
             }
         }
@@ -99,7 +100,7 @@ fn find_tool(dir: &Path, name: &str) -> Option<PathBuf> {
 
 /// Runs `exe --version` and returns the version number, e.g. `0.12.0`
 /// (first line of the output is `cjxl v0.12.0 4128790 [...]`).
-fn tool_version(exe: &Path) -> Result<String, String> {
+fn tool_version(exe: &Path) -> Result<String, Msg> {
     let name = exe.file_name().unwrap_or_default().to_string_lossy();
     let mut cmd = Command::new(exe);
     cmd.arg("--version");
@@ -108,14 +109,14 @@ fn tool_version(exe: &Path) -> Result<String, String> {
 
 /// Runs `cmd` without a console window for at most `timeout` (then it is
 /// killed) and reads the version from its output.
-fn version_of(mut cmd: Command, name: &str, timeout: Duration) -> Result<String, String> {
+fn version_of(mut cmd: Command, name: &str, timeout: Duration) -> Result<String, Msg> {
     let mut child = cmd
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .creation_flags(CREATE_NO_WINDOW)
         .spawn()
-        .map_err(|e| format!("{name} startet nicht: {e}"))?;
+        .map_err(|_| Msg::new(keys::WONT_START).with("name", name))?;
     // Read stdout on its own thread so a full pipe can never block the tool.
     let mut pipe = child.stdout.take().expect("stdout is piped");
     let reader = thread::spawn(move || {
@@ -131,7 +132,7 @@ fn version_of(mut cmd: Command, name: &str, timeout: Duration) -> Result<String,
             _ => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err(format!("{name} antwortet nicht."));
+                return Err(Msg::new(keys::NO_RESPONSE).with("name", name));
             }
         }
     };
@@ -143,7 +144,7 @@ fn version_of(mut cmd: Command, name: &str, timeout: Duration) -> Result<String,
     });
     match version {
         Some(v) if status.success() => Ok(v.to_string()),
-        _ => Err(format!("{name} liefert keine Versionsangabe.")),
+        _ => Err(Msg::new(keys::NO_VERSION).with("name", name)),
     }
 }
 
@@ -328,7 +329,7 @@ mod tests {
         cmd.args(["-n", "6", "127.0.0.1"]);
         let start = Instant::now();
         let err = version_of(cmd, "ping.exe", Duration::from_millis(200)).unwrap_err();
-        assert_eq!(err, "ping.exe antwortet nicht.");
+        assert_eq!(err, Msg::new(keys::NO_RESPONSE).with("name", "ping.exe"));
         assert!(
             start.elapsed() < Duration::from_secs(3),
             "{:?}",

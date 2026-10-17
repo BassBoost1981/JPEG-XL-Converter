@@ -1,6 +1,17 @@
 import { create } from "zustand";
 import { backend } from "../api";
-import type { ItemEvent, ItemStatus, Mode, PauseReason, QueueItem, RunSummary, ToolStatus } from "../api/types";
+import type {
+  ItemEvent,
+  ItemStatus,
+  Lang,
+  Mode,
+  Msg,
+  PauseReason,
+  QueueItem,
+  RunSummary,
+  ToolStatus,
+} from "../api/types";
+import { langFromLocale } from "../i18n";
 import type { RunState } from "../lib/format";
 import { DEFAULT_SETTINGS, restoreSettings, toJobSettings, type UiSettings } from "./settings";
 
@@ -8,19 +19,23 @@ export type Row = QueueItem & {
   status: ItemStatus;
   progress: number;
   outSize?: number;
-  note?: string;
+  notes: Msg[];
   thumb?: string;
 };
 
 export interface AppState {
   settings: UiSettings;
+  /** Windows display language, from `init()`. */
+  systemLang: Lang;
+  /** The data folder is read-only: settings are not saved. */
+  readOnly: boolean;
   queues: Record<Mode, Row[]>;
   selected: Record<Mode, number | null>;
   run: RunState;
   pauseReason: PauseReason | null;
   summary: RunSummary | null;
   tools: ToolStatus | null;
-  notice: string | null;
+  notice: Msg | null;
 
   addPaths(paths: string[]): Promise<void>;
   clear(): Promise<void>;
@@ -30,16 +45,25 @@ export interface AppState {
   retryFailed(): Promise<void>;
   select(id: number | null): void;
   updateSettings(patch: Partial<UiSettings>): void;
+  /** Saves a change still waiting for the debounce right now (the window is closing). Does nothing without one. */
+  flushSettings(): void;
   applyEvent(e: ItemEvent): void;
   /** `run-paused` event from the backend. */
   paused(reason: PauseReason): void;
   /** `run-finished` event from the backend. */
   finished(summary: RunSummary): void;
-  /** Loads tools and settings and subscribes to backend events. Returns the unsubscribe function. */
+  /** Loads tools, settings, system language and storage state and subscribes to backend events. Returns the unsubscribe function. */
   init(): Promise<() => void>;
 }
 
-const errorMessage = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+/** The language in use: the chosen one, otherwise the Windows display language. */
+export const selectLang = (s: Pick<AppState, "settings" | "systemLang">): Lang => s.settings.lang ?? s.systemLang;
+
+/** A backend error is a `Msg`; anything else that was thrown is an internal error. */
+const errorMsg = (e: unknown): Msg =>
+  typeof e === "object" && e !== null && typeof (e as { key?: unknown }).key === "string"
+    ? (e as Msg)
+    : { key: "error.internal" };
 
 const SAVE_DELAY_MS = 500;
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -48,6 +72,9 @@ const isFailed = (s: ItemStatus) => s === "error" || s === "verifyFailed";
 
 export const useApp = create<AppState>()((set, get) => ({
   settings: DEFAULT_SETTINGS,
+  // A first guess until `init()` has the Windows language, so the first frame is not in the wrong language.
+  systemLang: langFromLocale(navigator.language),
+  readOnly: false,
   queues: { enc: [], dec: [] },
   selected: { enc: null, dec: null },
   run: "idle",
@@ -64,7 +91,7 @@ export const useApp = create<AppState>()((set, get) => ({
         const known = new Set(st.queues[mode].map((r) => r.id));
         const fresh: Row[] = items
           .filter((i) => !known.has(i.id))
-          .map((i) => ({ ...i, status: "waiting", progress: 0 }));
+          .map((i) => ({ ...i, status: "waiting", progress: 0, notes: [] }));
         const queue = [...st.queues[mode], ...fresh];
         return {
           queues: { ...st.queues, [mode]: queue },
@@ -73,14 +100,12 @@ export const useApp = create<AppState>()((set, get) => ({
           run: st.run === "finished" && fresh.length > 0 ? "idle" : st.run,
           notice:
             rejected > 0
-              ? rejected === 1
-                ? "1 Datei passt nicht zu diesem Modus und wurde nicht aufgenommen."
-                : `${rejected} Dateien passen nicht zu diesem Modus und wurden nicht aufgenommen.`
+              ? { key: rejected === 1 ? "notice.rejected.one" : "notice.rejected.other", params: { n: rejected } }
               : st.notice,
         };
       });
     } catch (e) {
-      set({ notice: errorMessage(e) });
+      set({ notice: errorMsg(e) });
     }
   },
 
@@ -91,7 +116,7 @@ export const useApp = create<AppState>()((set, get) => ({
     try {
       await backend.clearQueue(mode);
     } catch (e) {
-      set({ notice: errorMessage(e) });
+      set({ notice: errorMsg(e) });
       return;
     }
     set((st) => ({
@@ -107,9 +132,9 @@ export const useApp = create<AppState>()((set, get) => ({
     const { settings } = get();
     set({ run: "running", summary: null, pauseReason: null, notice: null });
     try {
-      await backend.startRun(settings.mode, toJobSettings(settings));
+      await backend.startRun(settings.mode, toJobSettings(settings), selectLang(get()));
     } catch (e) {
-      set({ run: "idle", notice: errorMessage(e) });
+      set({ run: "idle", notice: errorMsg(e) });
     }
   },
 
@@ -117,7 +142,7 @@ export const useApp = create<AppState>()((set, get) => ({
     try {
       await backend.pauseRun();
     } catch (e) {
-      set({ notice: errorMessage(e) });
+      set({ notice: errorMsg(e) });
     }
   },
 
@@ -126,7 +151,7 @@ export const useApp = create<AppState>()((set, get) => ({
     try {
       await backend.resumeRun();
     } catch (e) {
-      set({ run: "paused", notice: errorMessage(e) });
+      set({ run: "paused", notice: errorMsg(e) });
     }
   },
 
@@ -140,14 +165,14 @@ export const useApp = create<AppState>()((set, get) => ({
       queues: {
         ...st.queues,
         [mode]: st.queues[mode].map((r) =>
-          isFailed(r.status) ? { ...r, status: "waiting", progress: 0, outSize: undefined, note: undefined } : r,
+          isFailed(r.status) ? { ...r, status: "waiting", progress: 0, outSize: undefined, notes: [] } : r,
         ),
       },
     }));
     try {
-      await backend.retryFailed(mode, toJobSettings(settings));
+      await backend.retryFailed(mode, toJobSettings(settings), selectLang(get()));
     } catch (e) {
-      set({ run: "finished", notice: errorMessage(e) });
+      set({ run: "finished", notice: errorMsg(e) });
     }
   },
 
@@ -163,8 +188,16 @@ export const useApp = create<AppState>()((set, get) => ({
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => {
       saveTimer = undefined;
-      backend.saveSettings(get().settings).catch((e) => set({ notice: errorMessage(e) }));
+      backend.saveSettings(get().settings).catch((e) => set({ notice: errorMsg(e) }));
     }, SAVE_DELAY_MS);
+  },
+
+  flushSettings() {
+    if (saveTimer === undefined) return;
+    clearTimeout(saveTimer);
+    saveTimer = undefined;
+    // Fire and forget: the page is going away, so there is nobody left to show an error to.
+    backend.saveSettings(get().settings).catch(() => {});
   },
 
   applyEvent(e) {
@@ -178,7 +211,7 @@ export const useApp = create<AppState>()((set, get) => ({
           status: e.status,
           progress: e.progress,
           outSize: e.outSize ?? undefined,
-          note: e.note ?? undefined,
+          notes: e.notes,
         };
         return { queues: { ...st.queues, [mode]: queue } };
       }
@@ -201,25 +234,43 @@ export const useApp = create<AppState>()((set, get) => ({
       backend.onRunFinished((s) => get().finished(s)),
       backend.onFilesDropped((paths) => void get().addPaths(paths)),
     ];
-    try {
-      set({ tools: await backend.checkTools() });
-    } catch (e) {
-      set({ notice: errorMessage(e) });
-    }
-    try {
-      const saved = await backend.loadSettings();
-      // The recycle-bin switch always starts off (Global Constraints).
-      if (saved) set({ settings: { ...restoreSettings(saved), trashOriginals: false } });
-    } catch {
-      // Unreadable settings: keep defaults.
-    }
-    // A pending save is written when the page goes away; losing it would only lose the last change.
-    const flush = () => {
-      if (saveTimer === undefined) return;
-      clearTimeout(saveTimer);
-      saveTimer = undefined;
-      backend.saveSettings(get().settings).catch(() => {});
+    // Language, storage state and saved settings are started first and applied as soon as each one is in,
+    // without waiting for the (slower) tool check, so the first frames are not in the wrong language.
+    const loadLanguage = async () => {
+      // Without a Windows language: English, no notice.
+      try {
+        set({ systemLang: langFromLocale(await backend.systemLocale()) });
+      } catch {
+        set({ systemLang: langFromLocale(null) });
+      }
     };
+    const loadStorage = async () => {
+      // Without storage state: writable, no notice.
+      try {
+        set({ readOnly: (await backend.storageInfo()).readOnly });
+      } catch {
+        set({ readOnly: false });
+      }
+    };
+    const loadSaved = async () => {
+      try {
+        const saved = await backend.loadSettings();
+        // The recycle-bin switch always starts off (Global Constraints).
+        if (saved) set({ settings: { ...restoreSettings(saved), trashOriginals: false } });
+      } catch {
+        // Unreadable settings: keep defaults.
+      }
+    };
+    const loadTools = async () => {
+      try {
+        set({ tools: await backend.checkTools() });
+      } catch (e) {
+        set({ notice: errorMsg(e) });
+      }
+    };
+    await Promise.all([loadLanguage(), loadStorage(), loadSaved(), loadTools()]);
+    // A pending save is also written when the page goes away (the close handler in `App` does it earlier).
+    const flush = () => get().flushSettings();
     window.addEventListener("pagehide", flush);
     return () => {
       window.removeEventListener("pagehide", flush);

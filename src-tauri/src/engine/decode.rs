@@ -21,18 +21,14 @@ use super::convert_io::{
     MetaState, MetaTransfer, from_png, strip_jpeg_metadata, strip_png_metadata,
 };
 use super::jxl_container::{has_jpeg_reconstruction, read_header};
+use super::msg::{Msg, keys};
 use super::originals::{TrashContext, copy_file_times, handle_original};
 use super::pipeline_util::{
-    Ctx, NOTE_DATES, NOTE_METADATA, Scratch, Stop, check_cancel, check_target, finished, load,
-    open_reason, pixels_equal, place, prepare, run_djxl,
+    Ctx, Scratch, Stop, check_cancel, check_target, finished, load, open_reason, pixels_equal,
+    place, prepare, run_djxl,
 };
 use super::types::{Outcome, OutputFormat, ScanEntry};
 use super::verify::{dims_match, image_dims};
-
-const NOTE_ANIMATION: &str = "Animation – .jxl behalten";
-const NOTE_NOT_EXACT: &str = "Gleitkomma- oder Mehrkanal-Bild – .jxl behalten";
-const DECODE_FAILED: &str = "Umwandlung aus JPEG XL fehlgeschlagen";
-const READ_ERROR: &str = "JPEG XL lässt sich nicht lesen";
 
 /// File extension of the result: `Auto` gives back the original JPEG when the
 /// file carries reconstruction data, otherwise a PNG.
@@ -80,7 +76,7 @@ fn run(
     check_target(target)?;
     check_cancel(ctx)?;
     let HeaderFacts { animated, fits_png } = header_facts(source)?;
-    let jbrd = has_jpeg_reconstruction(source).map_err(|_| Stop::error(READ_ERROR))?;
+    let jbrd = has_jpeg_reconstruction(source).map_err(|_| Stop::error(keys::JXL_UNREADABLE))?;
     let output = match decode.format {
         OutputFormat::Auto | OutputFormat::Jpg if jbrd => Output::Reconstructed,
         OutputFormat::Jpg => Output::PixelsJpeg,
@@ -100,7 +96,13 @@ fn run(
     match output {
         Output::Converted(format) => {
             let png = scratch.add(work.file("zwischen.png"));
-            run_djxl(ctx, source, &png, png_target, Stop::error(DECODE_FAILED))?;
+            run_djxl(
+                ctx,
+                source,
+                &png,
+                png_target,
+                Stop::error(keys::DECODE_FAILED),
+            )?;
             check_cancel(ctx)?;
             transfer = Some(from_png(&png, tmp, format, keep_metadata).map_err(Stop::Error)?);
             intermediate = Some(png);
@@ -113,7 +115,13 @@ fn run(
                 },
                 _ => png_target,
             };
-            run_djxl(ctx, source, tmp, djxl_target, Stop::error(DECODE_FAILED))?;
+            run_djxl(
+                ctx,
+                source,
+                tmp,
+                djxl_target,
+                Stop::error(keys::DECODE_FAILED),
+            )?;
             if !keep_metadata {
                 match output {
                     Output::Png => strip_png_metadata(tmp).map_err(Stop::Error)?,
@@ -128,10 +136,9 @@ fn run(
     check_cancel(ctx)?;
 
     // ---- check
-    let dims =
-        image_dims(tmp).map_err(|_| Stop::VerifyFailed("Ergebnis lässt sich nicht lesen"))?;
+    let dims = image_dims(tmp).map_err(|_| Stop::verify_failed(keys::RESULT_UNREADABLE))?;
     if !dims_match((entry.width, entry.height), dims) {
-        return Err(Stop::VerifyFailed("Abmessungen stimmen nicht"));
+        return Err(Stop::verify_failed(keys::DIMS_MISMATCH));
     }
     // A TIFF counts as lossless only with the pixels djxl gave.
     if let (Output::Converted(OutputFormat::Tiff), Some(png)) = (output, &intermediate) {
@@ -159,18 +166,18 @@ fn run(
         metadata_complete: dates_copied
             && (reconstructed || (keep_metadata && transfer.is_none_or(|t| t.complete()))),
     };
-    let mut notes: Vec<String> = Vec::new();
+    let mut notes: Vec<Msg> = Vec::new();
     if metadata_lost {
-        notes.push(NOTE_METADATA.to_string());
+        notes.push(Msg::new(keys::METADATA_INCOMPLETE));
     }
     if !dates_copied {
-        notes.push(NOTE_DATES.to_string());
+        notes.push(Msg::new(keys::DATES_NOT_KEPT));
     }
     if animated && settings.trash_originals {
-        notes.push(NOTE_ANIMATION.to_string());
+        notes.push(Msg::new(keys::ANIMATION_KEPT_JXL));
     }
     if full_depth && !fits_png && settings.trash_originals {
-        notes.push(NOTE_NOT_EXACT.to_string());
+        notes.push(Msg::new(keys::NOT_EXACT_KEPT_JXL));
     }
     notes.extend(handle_original(&trash, source, ctx.bin));
     (ctx.progress)(100);
@@ -180,13 +187,13 @@ fn run(
 
 /// The TIFF has the pixels of the PNG djxl wrote.
 fn check_pixels(png: &Path, tiff: &Path) -> Result<(), Stop> {
-    const FAILED: &str = "Pixelvergleich nicht möglich";
-    let (expected, _) = load(png).map_err(|_| Stop::VerifyFailed(FAILED))?;
-    let (actual, _) = load(tiff).map_err(|_| Stop::VerifyFailed(FAILED))?;
+    const FAILED: &str = keys::PIXEL_COMPARE_FAILED;
+    let (expected, _) = load(png).map_err(|_| Stop::verify_failed(FAILED))?;
+    let (actual, _) = load(tiff).map_err(|_| Stop::verify_failed(FAILED))?;
     if pixels_equal(&expected, &actual) {
         Ok(())
     } else {
-        Err(Stop::VerifyFailed("Pixel weichen vom Original ab"))
+        Err(Stop::verify_failed(keys::PIXELS_DIFFER))
     }
 }
 
@@ -205,7 +212,7 @@ struct HeaderFacts {
 /// The source can be opened; the facts from its image header.
 fn header_facts(path: &Path) -> Result<HeaderFacts, Stop> {
     File::open(path).map_err(|e| Stop::error(open_reason(&e)))?;
-    let image = read_header(path).ok_or_else(|| Stop::error(READ_ERROR))?;
+    let image = read_header(path).ok_or_else(|| Stop::error(keys::JXL_UNREADABLE))?;
     let metadata = &image.image_header().metadata;
     let fits = |depth: BitDepth| matches!(depth, BitDepth::IntegerSample { bits_per_sample } if bits_per_sample <= 16);
     Ok(HeaderFacts {

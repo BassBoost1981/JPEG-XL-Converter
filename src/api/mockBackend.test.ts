@@ -28,7 +28,7 @@ describe("MockBackend", () => {
     b.onItemProgress((e) => events.push(e));
     b.onRunFinished((s) => finished.push(s));
 
-    await b.startRun("enc", job);
+    await b.startRun("enc", job, "de");
     await vi.advanceTimersByTimeAsync(60_000);
 
     for (const it of items) {
@@ -54,7 +54,7 @@ describe("MockBackend", () => {
     const finished: RunSummary[] = [];
     b.onRunPaused((r) => paused.push(r));
     b.onRunFinished((s) => finished.push(s));
-    await b.startRun("dec", job);
+    await b.startRun("dec", job, "de");
     await vi.advanceTimersByTimeAsync(300);
     await b.pauseRun();
     expect(paused).toEqual([{ type: "user" }]);
@@ -71,11 +71,61 @@ describe("MockBackend", () => {
     const { items } = await b.addPaths(["y"], "enc");
     const finished: RunSummary[] = [];
     b.onRunFinished((s) => finished.push(s));
-    await b.startRun("enc", job);
+    await b.startRun("enc", job, "de");
     await vi.advanceTimersByTimeAsync(120_000);
     expect(items).toHaveLength(3);
     expect(finished[0].skipped).toBe(1);
     expect(finished[0].done).toBe(8);
+  });
+
+  it("Hinweise sind Msg-Listen: leer bei Erfolg, Schlüssel bei Übersprungenem", async () => {
+    const b = new MockBackend();
+    await b.addPaths(["x"], "enc");
+    await b.addPaths(["y"], "enc");
+    const events: ItemEvent[] = [];
+    b.onItemProgress((e) => events.push(e));
+    await b.startRun("enc", job, "en");
+    await vi.advanceTimersByTimeAsync(120_000);
+    expect(events.every((e) => Array.isArray(e.notes))).toBe(true);
+    expect(events.filter((e) => e.status === "done").every((e) => e.notes.length === 0)).toBe(true);
+    const skipped = events.filter((e) => e.status === "skipped");
+    expect(skipped).toHaveLength(1);
+    expect(skipped[0].notes).toEqual([{ key: "error.targetExists" }]);
+  });
+
+  it("retryFailed nimmt die Sprache an und startet ohne Fehler", async () => {
+    const b = new MockBackend();
+    await b.addPaths(["x"], "enc");
+    const finished: RunSummary[] = [];
+    b.onRunFinished((s) => finished.push(s));
+    await b.retryFailed("enc", job, "en");
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(finished).toHaveLength(1);
+    expect(finished[0]).toMatchObject({ done: 0 });
+  });
+
+  it("Werkzeugstatus hat eine leere messages-Liste", async () => {
+    expect(await new MockBackend().checkTools()).toMatchObject({ ok: true, messages: [] });
+  });
+
+  it("systemLocale liefert die Browsersprache, storageInfo ist nie schreibgeschützt", async () => {
+    const b = new MockBackend();
+    expect(await b.systemLocale()).toBe(navigator.language);
+    expect(await b.storageInfo()).toEqual({ readOnly: false });
+  });
+
+  it("setTitle setzt den Dokumenttitel", () => {
+    const b = new MockBackend();
+    b.setTitle("JPEG XL Converter");
+    expect(document.title).toBe("JPEG XL Converter");
+    b.setTitle("JPEG XL Konverter");
+    expect(document.title).toBe("JPEG XL Konverter");
+  });
+
+  it("Dialoge liefern Beispielwerte und nehmen die Beschriftungen an", async () => {
+    const b = new MockBackend();
+    expect(await b.pickFiles("enc", { title: "Select files", filterImages: "Images" })).toHaveLength(1);
+    expect(await b.pickFolder("Select folder")).toBe("C:\\Users\\Lena\\Bilder");
   });
 
   it("Abbrechen beendet den Lauf mit genau einem onRunFinished", async () => {
@@ -83,7 +133,7 @@ describe("MockBackend", () => {
     await b.addPaths(["x"], "enc");
     const finished: RunSummary[] = [];
     b.onRunFinished((s) => finished.push(s));
-    await b.startRun("enc", job);
+    await b.startRun("enc", job, "de");
     await vi.advanceTimersByTimeAsync(300);
     await b.cancelRun();
     await vi.advanceTimersByTimeAsync(60_000);
@@ -109,7 +159,7 @@ describe("MockBackend", () => {
     await b.clearQueue("enc");
     const finished: RunSummary[] = [];
     b.onRunFinished((s) => finished.push(s));
-    await b.startRun("enc", job);
+    await b.startRun("enc", job, "de");
     await vi.advanceTimersByTimeAsync(1000);
     expect(finished[0]).toMatchObject({ done: 0 });
   });

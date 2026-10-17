@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   ctaLabel,
+  ctaState,
   footerHint,
   formatCount,
   formatDelta,
@@ -11,10 +12,17 @@ import {
 
 describe("formatSize (1 MB = 1 048 576 Bytes)", () => {
   it("rechnet binär mit Dezimalkomma", () => {
-    expect(formatSize(389_120)).toBe("380 KB");
-    expect(formatSize(7_130_317)).toBe("6,80 MB");
-    expect(formatSize(149_212_364)).toBe("142,3 MB");
-    expect(formatSize(44_238_131_200)).toBe("41,2 GB");
+    expect(formatSize(389_120, "de")).toBe("380 KB");
+    expect(formatSize(7_130_317, "de")).toBe("6,80 MB");
+    expect(formatSize(149_212_364, "de")).toBe("142,3 MB");
+    expect(formatSize(44_238_131_200, "de")).toBe("41,2 GB");
+  });
+
+  it("rechnet binär mit Dezimalpunkt auf Englisch", () => {
+    expect(formatSize(389_120, "en")).toBe("380 KB");
+    expect(formatSize(7_130_317, "en")).toBe("6.80 MB");
+    expect(formatSize(149_212_364, "en")).toBe("142.3 MB");
+    expect(formatSize(44_238_131_200, "en")).toBe("41.2 GB");
   });
 });
 
@@ -28,8 +36,14 @@ describe("formatDelta", () => {
 });
 
 describe("formatCount / formatDistance", () => {
-  it("formatiert Zahlen", () => {
-    expect(formatCount(9812)).toBe("9.812");
+  it("formatiert Zahlen je Sprache", () => {
+    expect(formatCount(9812, "de")).toBe("9.812");
+    expect(formatCount(9812, "en")).toBe("9,812");
+    expect(formatCount(7, "de")).toBe("7");
+    expect(formatCount(7, "en")).toBe("7");
+  });
+
+  it("Distanz hat in beiden Sprachen einen Punkt", () => {
     expect(formatDistance(0.5)).toBe("0.5");
     expect(formatDistance(1.2)).toBe("1.2");
     expect(formatDistance(1.18)).toBe("1.18");
@@ -38,33 +52,74 @@ describe("formatCount / formatDistance", () => {
 });
 
 describe("Texte", () => {
+  const summary = { done: 9812, skipped: 14, errors: 2, bytesIn: 44_238_131_200, bytesOut: 35_433_480_192 };
+
   it("summaryLine", () => {
-    expect(
-      summaryLine({ done: 9812, skipped: 14, errors: 2, bytesIn: 44_238_131_200, bytesOut: 35_433_480_192 }),
-    ).toBe("9.812 fertig · 14 übersprungen · 2 Fehler · 41,2 GB → 33,0 GB");
+    expect(summaryLine(summary, "de")).toBe("9.812 fertig · 14 übersprungen · 2 Fehler · 41,2 GB → 33,0 GB");
+    expect(summaryLine(summary, "en")).toBe("9,812 done · 14 skipped · 2 errors · 41.2 GB → 33.0 GB");
+  });
+
+  it("summaryLine: Singular bei genau einem Fehler", () => {
+    const one = { ...summary, errors: 1 };
+    expect(summaryLine(one, "en")).toBe("9,812 done · 14 skipped · 1 error · 41.2 GB → 33.0 GB");
+    expect(summaryLine(one, "de")).toBe("9.812 fertig · 14 übersprungen · 1 Fehler · 41,2 GB → 33,0 GB");
+    expect(summaryLine({ ...summary, errors: 0 }, "en")).toContain("0 errors");
   });
 
   it("footerHint", () => {
-    expect(footerHint({ done: 0, total: 6 })).toBe("Ersparnis erscheint nach der ersten fertigen Datei");
-    expect(footerHint({ done: 2, total: 6, bytesIn: 7_130_317, bytesOut: 5_704_253 })).toBe(
+    expect(footerHint({ done: 0, total: 6 }, "de")).toBe("Ersparnis erscheint nach der ersten fertigen Datei");
+    expect(footerHint({ done: 2, total: 6, bytesIn: 7_130_317, bytesOut: 5_704_253 }, "de")).toBe(
       "2 von 6 fertig · 6,80 MB → 5,44 MB",
     );
-    expect(footerHint({ done: 2, total: 6 })).toBe("2 von 6 fertig");
+    expect(footerHint({ done: 2, total: 6 }, "de")).toBe("2 von 6 fertig");
+    expect(footerHint({ done: 0, total: 6 }, "en")).toBe("Savings appear after the first finished file");
+    expect(footerHint({ done: 2, total: 6, bytesIn: 7_130_317, bytesOut: 5_704_253 }, "en")).toBe(
+      "2 of 6 done · 6.80 MB → 5.44 MB",
+    );
+    expect(footerHint({ done: 1200, total: 3400 }, "en")).toBe("1,200 of 3,400 done");
   });
 
   it("ctaLabel", () => {
-    expect(ctaLabel({ mode: "enc", run: "idle", waiting: 6, failed: 0 })).toBe("6 Dateien in JPEG XL konvertieren");
-    expect(ctaLabel({ mode: "enc", run: "idle", waiting: 1, failed: 0 })).toBe("1 Datei in JPEG XL konvertieren");
-    expect(ctaLabel({ mode: "dec", run: "idle", waiting: 3, failed: 0 })).toBe("3 Dateien zurückkonvertieren");
-    expect(ctaLabel({ mode: "dec", run: "idle", waiting: 1, failed: 0 })).toBe("1 Datei zurückkonvertieren");
-    expect(ctaLabel({ mode: "enc", run: "running", waiting: 2, failed: 0 })).toBe("Anhalten");
-    expect(ctaLabel({ mode: "enc", run: "paused", waiting: 2, failed: 0 })).toBe("Fortsetzen");
-    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 0, failed: 2 })).toBe("Fehlgeschlagene erneut versuchen");
-    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 0, failed: 0 })).toBe("Alles erledigt");
+    expect(ctaLabel({ mode: "enc", run: "idle", waiting: 6, failed: 0 }, "de")).toBe("6 Dateien in JPEG XL konvertieren");
+    expect(ctaLabel({ mode: "enc", run: "idle", waiting: 1, failed: 0 }, "de")).toBe("1 Datei in JPEG XL konvertieren");
+    expect(ctaLabel({ mode: "dec", run: "idle", waiting: 3, failed: 0 }, "de")).toBe("3 Dateien zurückkonvertieren");
+    expect(ctaLabel({ mode: "dec", run: "idle", waiting: 1, failed: 0 }, "de")).toBe("1 Datei zurückkonvertieren");
+    expect(ctaLabel({ mode: "enc", run: "running", waiting: 2, failed: 0 }, "de")).toBe("Anhalten");
+    expect(ctaLabel({ mode: "enc", run: "paused", waiting: 2, failed: 0 }, "de")).toBe("Fortsetzen");
+    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 0, failed: 2 }, "de")).toBe("Fehlgeschlagene erneut versuchen");
+    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 0, failed: 0 }, "de")).toBe("Alles erledigt");
+  });
+
+  it("ctaLabel (en)", () => {
+    expect(ctaLabel({ mode: "enc", run: "idle", waiting: 6, failed: 0 }, "en")).toBe("Convert 6 files to JPEG XL");
+    expect(ctaLabel({ mode: "enc", run: "idle", waiting: 1, failed: 0 }, "en")).toBe("Convert 1 file to JPEG XL");
+    expect(ctaLabel({ mode: "dec", run: "idle", waiting: 3, failed: 0 }, "en")).toBe("Convert 3 files back");
+    expect(ctaLabel({ mode: "dec", run: "idle", waiting: 1, failed: 0 }, "en")).toBe("Convert 1 file back");
+    expect(ctaLabel({ mode: "enc", run: "idle", waiting: 1500, failed: 0 }, "en")).toBe("Convert 1,500 files to JPEG XL");
+    expect(ctaLabel({ mode: "enc", run: "running", waiting: 2, failed: 0 }, "en")).toBe("Stop");
+    expect(ctaLabel({ mode: "enc", run: "paused", waiting: 2, failed: 0 }, "en")).toBe("Resume");
+    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 0, failed: 2 }, "en")).toBe("Retry failed");
+    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 0, failed: 0 }, "en")).toBe("All done");
   });
 
   it("ctaLabel (R2): neue wartende Dateien nach einem Lauf starten, auch bei Fehlern", () => {
-    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 3, failed: 1 })).toBe("3 Dateien in JPEG XL konvertieren");
-    expect(ctaLabel({ mode: "dec", run: "finished", waiting: 1, failed: 0 })).toBe("1 Datei zurückkonvertieren");
+    expect(ctaLabel({ mode: "enc", run: "finished", waiting: 3, failed: 1 }, "de")).toBe("3 Dateien in JPEG XL konvertieren");
+    expect(ctaLabel({ mode: "dec", run: "finished", waiting: 1, failed: 0 }, "de")).toBe("1 Datei zurückkonvertieren");
+  });
+});
+
+describe("ctaState", () => {
+  it("liefert den Zustand ohne Text", () => {
+    expect(ctaState({ mode: "enc", run: "idle", waiting: 6, failed: 0 })).toBe("start");
+    expect(ctaState({ mode: "enc", run: "idle", waiting: 0, failed: 0 })).toBe("empty");
+    expect(ctaState({ mode: "enc", run: "running", waiting: 2, failed: 0 })).toBe("pause");
+    expect(ctaState({ mode: "enc", run: "paused", waiting: 2, failed: 0 })).toBe("resume");
+    expect(ctaState({ mode: "enc", run: "finished", waiting: 0, failed: 2 })).toBe("retry");
+    expect(ctaState({ mode: "enc", run: "finished", waiting: 0, failed: 0 })).toBe("allDone");
+  });
+
+  it("wartende Dateien nach einem Lauf starten, auch bei Fehlern (R2)", () => {
+    expect(ctaState({ mode: "enc", run: "finished", waiting: 3, failed: 1 })).toBe("start");
+    expect(ctaState({ mode: "dec", run: "finished", waiting: 1, failed: 0 })).toBe("start");
   });
 });

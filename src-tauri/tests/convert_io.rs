@@ -16,6 +16,7 @@ use jpeg_xl_konverter_lib::engine::args::{DjxlTarget, cjxl_args, djxl_args};
 use jpeg_xl_konverter_lib::engine::convert_io::{
     MetaState, MetaTransfer, from_png, strip_jpeg_metadata, strip_png_metadata, to_png,
 };
+use jpeg_xl_konverter_lib::engine::msg::{Msg, keys};
 use jpeg_xl_konverter_lib::engine::types::{CancelToken, EncodeSettings, InputKind, OutputFormat};
 use jpeg_xl_konverter_lib::engine::verify::same_pixels;
 use png::chunk::ChunkType;
@@ -24,8 +25,6 @@ use tiff::tags::Tag;
 
 const MARKER: &str = "TESTMARKER";
 const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
-const READ_ERROR: &str = "Bild lässt sich nicht lesen";
-const OPEN_ERROR: &str = "Datei lässt sich nicht öffnen";
 
 use MetaState::{Lost, NotPresent, Transferred};
 
@@ -378,11 +377,7 @@ fn float_images_are_refused() {
 
         let result = to_png(&tiff, &png, true);
 
-        assert_eq!(
-            result,
-            Err("Gleitkomma-Bilder werden nicht unterstützt".to_string()),
-            "{name}"
-        );
+        assert_eq!(result, Err(Msg::new(keys::FLOAT_UNSUPPORTED)), "{name}");
         assert!(!png.exists());
     }
 }
@@ -419,7 +414,7 @@ fn cmyk_tiff_is_refused() {
 
         assert_eq!(
             result,
-            Err("CMYK-Bilder werden nicht unterstützt".to_string()),
+            Err(Msg::new(keys::CMYK_UNSUPPORTED)),
             "{}",
             tiff.display()
         );
@@ -445,7 +440,7 @@ fn to_png_only_takes_tiff_webp_and_bmp() {
         let result = to_png(refused, &out, true);
         assert_eq!(
             result,
-            Err("Format wird hier nicht unterstützt".to_string()),
+            Err(Msg::new(keys::FORMAT_UNSUPPORTED)),
             "{}",
             refused.display()
         );
@@ -755,20 +750,23 @@ fn single_page_and_single_frame_sources_lose_no_frames() {
 }
 
 #[test]
-fn to_png_errors_are_short_german_texts() {
+fn to_png_errors_are_message_keys() {
     let dir = tempfile::tempdir().unwrap();
     let png = dir.path().join("out.png");
 
     let missing = to_png(&dir.path().join("fehlt.tif"), &png, true);
-    assert_eq!(missing, Err(OPEN_ERROR.to_string()));
+    assert_eq!(missing, Err(Msg::new(keys::CANNOT_OPEN)));
 
     let garbage = dir.path().join("kaputt.webp");
     fs::write(&garbage, b"this is not an image at all").unwrap();
-    assert_eq!(to_png(&garbage, &png, true), Err(READ_ERROR.to_string()));
+    assert_eq!(
+        to_png(&garbage, &png, true),
+        Err(Msg::new(keys::CANNOT_READ))
+    );
 
     let empty = dir.path().join("leer.tif");
     fs::write(&empty, b"").unwrap();
-    assert_eq!(to_png(&empty, &png, true), Err(READ_ERROR.to_string()));
+    assert_eq!(to_png(&empty, &png, true), Err(Msg::new(keys::CANNOT_READ)));
 
     assert!(
         !png.exists(),
@@ -785,7 +783,7 @@ fn truncated_image_data_is_an_error_without_output() {
     let bytes = fs::read(&tiff).unwrap();
     fs::write(&tiff, &bytes[..bytes.len() / 2]).unwrap();
 
-    assert_eq!(to_png(&tiff, &png, true), Err(READ_ERROR.to_string()));
+    assert_eq!(to_png(&tiff, &png, true), Err(Msg::new(keys::CANNOT_READ)));
     assert!(!png.exists());
 }
 
@@ -1128,16 +1126,15 @@ fn webp_refuses_images_larger_than_its_limit() {
 
     let result = from_png(&png, &webp, OutputFormat::Webp, true);
 
-    let message = result.unwrap_err();
-    assert!(
-        message.starts_with("Bild ist für WebP zu groß"),
-        "{message}"
+    assert_eq!(
+        result,
+        Err(Msg::new(keys::WEBP_TOO_LARGE).with("max", "16383"))
     );
     assert!(!webp.exists());
 }
 
 #[test]
-fn from_png_errors_are_short_german_texts() {
+fn from_png_errors_are_message_keys() {
     let dir = tempfile::tempdir().unwrap();
     let out = dir.path().join("out.tif");
 
@@ -1147,14 +1144,14 @@ fn from_png_errors_are_short_german_texts() {
         OutputFormat::Tiff,
         true,
     );
-    assert_eq!(missing, Err(OPEN_ERROR.to_string()));
+    assert_eq!(missing, Err(Msg::new(keys::CANNOT_OPEN)));
 
     let garbage = dir.path().join("kaputt.png");
     fs::write(&garbage, b"this is not an image at all").unwrap();
     for format in [OutputFormat::Tiff, OutputFormat::Webp] {
         assert_eq!(
             from_png(&garbage, &out, format, true),
-            Err(READ_ERROR.to_string()),
+            Err(Msg::new(keys::CANNOT_READ)),
             "{format:?}"
         );
     }
@@ -1164,7 +1161,7 @@ fn from_png_errors_are_short_german_texts() {
     for format in [OutputFormat::Auto, OutputFormat::Png, OutputFormat::Jpg] {
         assert_eq!(
             from_png(&png, &out, format, true),
-            Err("Ausgabeformat wird nicht unterstützt".to_string()),
+            Err(Msg::new(keys::OUTPUT_FORMAT_UNSUPPORTED)),
             "{format:?}"
         );
     }
@@ -1227,7 +1224,7 @@ fn huge_image_is_refused_before_it_is_decoded() {
     let out = dir.path().join("huge.out");
     write_huge_png(&png);
     write_huge_tiff(&tiff);
-    let too_big = Err("Bild ist zu groß zum Umwandeln".to_string());
+    let too_big = Err(Msg::new(keys::IMAGE_TOO_BIG));
 
     assert_eq!(to_png(&tiff, &out, true), too_big);
     assert_eq!(from_png(&png, &out, OutputFormat::Tiff, true), too_big);
@@ -1242,7 +1239,7 @@ fn unwritable_destination_is_a_write_error() {
     common::write_bmp(&bmp);
     common::write_png(&png, PngKind::Rgb8);
     let missing = dir.path().join("fehlt");
-    let write_error = Err("Datei lässt sich nicht schreiben".to_string());
+    let write_error = Err(Msg::new(keys::CANNOT_WRITE));
 
     assert_eq!(to_png(&bmp, &missing.join("out.png"), true), write_error);
     for format in [OutputFormat::Tiff, OutputFormat::Webp] {
@@ -1370,11 +1367,14 @@ fn strip_png_metadata_rejects_bad_files_and_leaves_them_alone() {
     let dir = tempfile::tempdir().unwrap();
 
     let missing = strip_png_metadata(&dir.path().join("fehlt.png"));
-    assert_eq!(missing, Err(OPEN_ERROR.to_string()));
+    assert_eq!(missing, Err(Msg::new(keys::CANNOT_OPEN)));
 
     let garbage = dir.path().join("kaputt.png");
     fs::write(&garbage, b"this is not an image at all").unwrap();
-    assert_eq!(strip_png_metadata(&garbage), Err(READ_ERROR.to_string()));
+    assert_eq!(
+        strip_png_metadata(&garbage),
+        Err(Msg::new(keys::CANNOT_READ))
+    );
 
     // A PNG cut off before IEND, once right before it, once inside the image data.
     let whole = dir.path().join("whole.png");
@@ -1388,7 +1388,7 @@ fn strip_png_metadata_rejects_bad_files_and_leaves_them_alone() {
         fs::write(&cut, &bytes[..len]).unwrap();
         assert_eq!(
             strip_png_metadata(&cut),
-            Err(READ_ERROR.to_string()),
+            Err(Msg::new(keys::CANNOT_READ)),
             "{name}"
         );
         assert_eq!(fs::read(&cut).unwrap(), &bytes[..len], "{name}");
@@ -1415,7 +1415,7 @@ fn strip_png_metadata_that_cannot_replace_the_file_cleans_up() {
 
     permissions.set_readonly(false);
     fs::set_permissions(&png, permissions).unwrap();
-    assert_eq!(result, Err("Datei lässt sich nicht bearbeiten".to_string()));
+    assert_eq!(result, Err(Msg::new(keys::CANNOT_EDIT)));
     assert_eq!(fs::read(&png).unwrap(), before);
     assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
 }

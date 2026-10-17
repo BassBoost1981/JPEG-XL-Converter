@@ -16,20 +16,16 @@ use std::time::{Duration, Instant};
 use super::decode::{decode_ext, decode_one};
 use super::disk::free_bytes;
 use super::encode::{Ctx, encode_one};
+use super::msg::{Msg, keys};
 use super::originals::RecycleBin;
-use super::pipeline_util::TARGET_EXISTS;
 use super::report::RunReport;
 use super::scan::identity;
 use super::targets::target_path;
 use super::tools::Tools;
 use super::types::{
-    CancelToken, ItemEvent, ItemStatus, JobSettings, Mode, Outcome, PauseReason, QueueItem,
+    CancelToken, ItemEvent, ItemStatus, JobSettings, Lang, Mode, Outcome, PauseReason, QueueItem,
     RunSummary, ScanEntry,
 };
-
-const TARGET_UNKNOWN: &str = "Zielpfad lässt sich nicht bestimmen";
-const CLEAR_WHILE_RUNNING: &str =
-    "Die Warteschlange lässt sich während eines Durchlaufs nicht leeren";
 
 pub trait Processor: Send + Sync {
     fn target_for(&self, mode: Mode, e: &ScanEntry, s: &JobSettings) -> io::Result<PathBuf>;
@@ -129,6 +125,8 @@ struct Inner {
     sink: Arc<dyn ProgressSink>,
     workers: usize,
     log_dir: PathBuf,
+    /// Where the log goes if `log_dir` cannot be written.
+    fallback_log_dir: PathBuf,
     state: Mutex<State>,
     /// Signalled whenever waiting workers may find something new.
     wake: Condvar,
@@ -188,6 +186,7 @@ impl Queue {
         sink: Arc<dyn ProgressSink>,
         workers: usize,
         log_dir: PathBuf,
+        fallback_log_dir: PathBuf,
     ) -> Self {
         Queue {
             inner: Arc::new(Inner {
@@ -195,6 +194,7 @@ impl Queue {
                 sink,
                 workers: workers.max(1),
                 log_dir,
+                fallback_log_dir,
                 state: Mutex::new(State::default()),
                 wake: Condvar::new(),
             }),
@@ -250,10 +250,10 @@ impl Queue {
     }
 
     /// Removes every item of `mode`. Refused while a run is active.
-    pub fn clear(&self, mode: Mode) -> Result<(), String> {
+    pub fn clear(&self, mode: Mode) -> Result<(), Msg> {
         let mut st = self.inner.lock();
         if st.run.is_some() {
-            return Err(CLEAR_WHILE_RUNNING.to_string());
+            return Err(Msg::new(keys::CLEAR_WHILE_RUNNING));
         }
         st.items.retain(|item| item.mode != mode);
         Ok(())
@@ -261,14 +261,14 @@ impl Queue {
 
     /// Starts a run over the waiting items of `mode`. Does nothing while a
     /// run is active.
-    pub fn start(&self, mode: Mode, s: JobSettings) {
-        Inner::start(&self.inner, mode, s, false);
+    pub fn start(&self, mode: Mode, s: JobSettings, lang: Lang) {
+        Inner::start(&self.inner, mode, s, lang, false);
     }
 
     /// Puts the failed items of `mode` (error, check failed) back to waiting
     /// and starts a run. Does nothing while a run is active.
-    pub fn retry_failed(&self, mode: Mode, s: JobSettings) {
-        Inner::start(&self.inner, mode, s, true);
+    pub fn retry_failed(&self, mode: Mode, s: JobSettings, lang: Lang) {
+        Inner::start(&self.inner, mode, s, lang, true);
     }
 
     /// Running files finish; no new ones start until `resume`.
@@ -340,11 +340,11 @@ impl Inner {
             status,
             progress,
             out_size: o.and_then(|o| o.out_size),
-            note: o.and_then(|o| o.note.clone()),
+            notes: o.map(|o| o.notes.clone()).unwrap_or_default(),
         });
     }
 
-    fn start(this: &Arc<Inner>, mode: Mode, s: JobSettings, retry: bool) {
+    fn start(this: &Arc<Inner>, mode: Mode, s: JobSettings, lang: Lang, retry: bool) {
         let mut st = this.lock();
         if st.run.is_some() {
             return;
@@ -360,7 +360,7 @@ impl Inner {
         }
         st.run = Some(Run {
             mode,
-            report: RunReport::new(mode, &s),
+            report: RunReport::new(mode, &s, lang),
             settings: Arc::new(s),
             // A token cannot be reset, so every run gets its own.
             cancel: CancelToken::new(),
@@ -443,7 +443,7 @@ impl Inner {
                     status: ItemStatus::Waiting,
                     out_path: None,
                     out_size: None,
-                    note: None,
+                    notes: Vec::new(),
                 }
             }
         };
@@ -474,15 +474,15 @@ impl Inner {
             .target_for(job.mode, &job.entry, &job.settings)
         {
             Ok(target) => target,
-            Err(_) => return JobEnd::Finished(stopped(ItemStatus::Error, TARGET_UNKNOWN)),
+            Err(_) => return JobEnd::Finished(stopped(ItemStatus::Error, keys::TARGET_UNKNOWN)),
         };
         // Windows paths ignore letter case.
         let key = identity(&target).to_string_lossy().to_lowercase();
         if !self.lock().reserved.insert(key.clone()) {
-            return JobEnd::Finished(stopped(ItemStatus::Skipped, TARGET_EXISTS));
+            return JobEnd::Finished(stopped(ItemStatus::Skipped, keys::TARGET_EXISTS));
         }
         let end = if target.exists() {
-            JobEnd::Finished(stopped(ItemStatus::Skipped, TARGET_EXISTS))
+            JobEnd::Finished(stopped(ItemStatus::Skipped, keys::TARGET_EXISTS))
         } else if !self.processor.has_space(job.mode, &job.entry, &target) {
             JobEnd::NoSpace(drive_of(&target))
         } else {
@@ -517,18 +517,24 @@ impl Inner {
         self.wake.notify_all();
         let mut summary = run.report.summary();
         if run.report.has_problems() {
-            summary.log_path = run.report.write_log(&self.log_dir).ok();
+            // A pulled stick must not cost the log: try the temp folder once.
+            summary.log_path = run
+                .report
+                .write_log(&self.log_dir)
+                .or_else(|_| run.report.write_log(&self.fallback_log_dir))
+                .ok();
         }
         self.sink.finished(summary);
     }
 }
 
-fn stopped(status: ItemStatus, note: &str) -> Outcome {
+/// An outcome with the single note `key`.
+fn stopped(status: ItemStatus, key: &str) -> Outcome {
     Outcome {
         status,
         out_path: None,
         out_size: None,
-        note: Some(note.to_string()),
+        notes: vec![Msg::new(key)],
     }
 }
 
@@ -551,7 +557,7 @@ mod tests {
     use super::*;
     use crate::engine::report::tests::is_log_name;
     use crate::engine::types::{
-        DecodeSettings, EncodeSettings, InputKind, ItemStatus, OutputFormat, OutputLocation,
+        DecodeSettings, EncodeSettings, InputKind, ItemStatus, Lang, OutputFormat, OutputLocation,
     };
     use std::collections::{HashMap, HashSet};
     use std::fs;
@@ -673,7 +679,7 @@ mod tests {
                         status: ItemStatus::Waiting,
                         out_path: None,
                         out_size: None,
-                        note: None,
+                        notes: Vec::new(),
                     };
                 }
                 // The token has no wake-up; look again shortly.
@@ -697,7 +703,11 @@ mod tests {
                 status,
                 out_path: done.then(|| target.to_path_buf()),
                 out_size: done.then_some(e.size / 2),
-                note: (!done).then(|| format!("Grund für {name}")),
+                notes: if done {
+                    Vec::new()
+                } else {
+                    vec![Msg::new(keys::CANNOT_READ)]
+                },
             }
         }
     }
@@ -818,6 +828,7 @@ mod tests {
             sink.clone(),
             workers,
             log_dir.path().join("Protokolle"),
+            log_dir.path().join("Ersatz"),
         );
         Setup {
             queue,
@@ -850,7 +861,7 @@ mod tests {
         );
         let t = setup(fake, 2);
         let ids = add(&t, &["a.png", "b.png", "c.png", "d.png", "e.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         let summary = t.sink.wait_finished(1);
 
         assert_eq!(summary.done, 3);
@@ -882,7 +893,7 @@ mod tests {
         let fake = FakeProcessor::new(&[], &[], false);
         let t = setup(fake, 2);
         let ids = add(&t, &["foto.jpg", "foto.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         // The first holds its reservation until the gate opens.
         t.sink.wait("one skipped", |r| {
             ids.iter().any(|id| has_status(r, *id, ItemStatus::Skipped))
@@ -897,10 +908,7 @@ mod tests {
             Rec::Item(ev) if ev.status == ItemStatus::Skipped => Some(ev.clone()),
             _ => None,
         });
-        assert_eq!(
-            skipped.unwrap().note.as_deref(),
-            Some("Zieldatei existiert bereits")
-        );
+        assert_eq!(skipped.unwrap().notes, [Msg::new(keys::TARGET_EXISTS)]);
     }
 
     /// Review Focus 5: the same file twice, and a folder plus a file from it.
@@ -955,7 +963,7 @@ mod tests {
     fn pause_finishes_running_then_stops() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         t.queue.pause();
@@ -975,7 +983,7 @@ mod tests {
     fn resume_continues() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         t.queue.pause();
@@ -994,7 +1002,7 @@ mod tests {
     fn cancel_returns_running_to_waiting() {
         let t = setup(FakeProcessor::new(&[], &[], false), 2);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink.wait("two running", |r| {
             has_status(r, ids[0], ItemStatus::Running) && has_status(r, ids[1], ItemStatus::Running)
         });
@@ -1010,7 +1018,7 @@ mod tests {
 
         // A new run gets a fresh token and does all three.
         t.fake.open();
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         assert_eq!(t.sink.wait_finished(2).done, 3);
     }
 
@@ -1021,7 +1029,7 @@ mod tests {
         assert!(t.queue.cancel_and_wait(Duration::ZERO));
 
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         assert!(t.queue.cancel_and_wait(TIMEOUT));
@@ -1034,7 +1042,7 @@ mod tests {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         t.fake.deaf.store(true, Ordering::SeqCst);
         let ids = add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
 
@@ -1053,7 +1061,7 @@ mod tests {
     fn cancel_while_paused_finishes() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png", "b.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
         t.queue.pause();
@@ -1070,7 +1078,7 @@ mod tests {
     fn disk_full_pauses_with_reason() {
         let t = setup(FakeProcessor::new(&[], &["b.png"], true), 1);
         let ids = add(&t, &["a.png", "b.png", "c.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("paused", |r| r.iter().any(|r| matches!(r, Rec::Paused(_))));
 
@@ -1091,7 +1099,7 @@ mod tests {
     fn add_during_run_is_processed() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let first = add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink.wait("a running", |r| {
             has_status(r, first[0], ItemStatus::Running)
         });
@@ -1116,13 +1124,13 @@ mod tests {
         );
         let t = setup(fake, 1);
         let ids = add(&t, &["a.png", "b.png", "c.png", "d.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         let first = t.sink.wait_finished(1);
         assert_eq!((first.done, first.skipped, first.errors), (1, 1, 2));
 
         t.fake.set_result("c.png", ItemStatus::Done);
         t.fake.set_result("d.png", ItemStatus::Done);
-        t.queue.retry_failed(Mode::Enc, settings());
+        t.queue.retry_failed(Mode::Enc, settings(), Lang::De);
         let second = t.sink.wait_finished(2);
 
         assert_eq!((second.done, second.skipped, second.errors), (2, 0, 0));
@@ -1135,7 +1143,7 @@ mod tests {
     fn clear_rejected_while_running() {
         let t = setup(FakeProcessor::new(&[], &[], false), 1);
         let ids = add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         t.sink
             .wait("a running", |r| has_status(r, ids[0], ItemStatus::Running));
 
@@ -1155,13 +1163,13 @@ mod tests {
         let fake = FakeProcessor::new(&[], &[], true);
         let t = setup(fake, 1);
         add(&t, &["a.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         assert_eq!(t.sink.wait_finished(1).log_path, None);
         assert!(!t.log_dir.path().join("Protokolle").exists());
 
         t.fake.set_result("e.png", ItemStatus::Error);
         add(&t, &["e.png"]);
-        t.queue.start(Mode::Enc, settings());
+        t.queue.start(Mode::Enc, settings(), Lang::De);
         let summary = t.sink.wait_finished(2);
         let log = summary.log_path.expect("log for the error");
 
@@ -1173,9 +1181,103 @@ mod tests {
             "{text}"
         );
         assert!(
-            text.contains("Fehler\tQ:\\bilder\\e.png\tGrund für e.png"),
+            text.contains("Fehler\tQ:\\bilder\\e.png\tBild lässt sich nicht lesen"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn log_goes_to_the_fallback_folder_when_the_log_folder_is_unusable() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        // The stick was pulled or the folder is blocked: a file sits where
+        // the log folder should be.
+        fs::write(t.log_dir.path().join("Protokolle"), "i am a file").unwrap();
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+        let log = t.sink.wait_finished(1).log_path.expect("log for the error");
+
+        assert_eq!(log.parent().unwrap(), t.log_dir.path().join("Ersatz"));
+        assert!(is_log_name(log.file_name().unwrap().to_str().unwrap()));
+        let text = fs::read_to_string(&log).unwrap();
+        assert!(
+            text.contains("Fehler\tQ:\\bilder\\e.png\tBild lässt sich nicht lesen"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn fallback_folder_stays_untouched_while_the_log_folder_works() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+        let log = t.sink.wait_finished(1).log_path.expect("log for the error");
+
+        assert_eq!(log.parent().unwrap(), t.log_dir.path().join("Protokolle"));
+        assert!(!t.log_dir.path().join("Ersatz").exists());
+    }
+
+    #[test]
+    fn no_log_path_when_both_log_folders_are_unusable() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        fs::write(t.log_dir.path().join("Protokolle"), "file").unwrap();
+        fs::write(t.log_dir.path().join("Ersatz"), "file").unwrap();
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+
+        assert_eq!(t.sink.wait_finished(1).log_path, None);
+    }
+
+    #[test]
+    fn start_writes_the_log_in_the_given_language() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::En);
+        let log = t.sink.wait_finished(1).log_path.expect("log for the error");
+
+        let text = fs::read_to_string(log).unwrap();
+        assert_eq!(
+            text.lines().next(),
+            Some("JPEG XL Converter – Log"),
+            "{text}"
+        );
+        assert!(text.contains("Error\tQ:\\bilder\\e.png\t"), "{text}");
+        assert!(!text.contains("Fehler"), "{text}");
+    }
+
+    #[test]
+    fn retry_keeps_new_lang() {
+        let t = setup(
+            FakeProcessor::new(&[("e.png", ItemStatus::Error)], &[], true),
+            1,
+        );
+        add(&t, &["e.png"]);
+        t.queue.start(Mode::Enc, settings(), Lang::De);
+        let first = fs::read_to_string(t.sink.wait_finished(1).log_path.unwrap()).unwrap();
+        assert_eq!(first.lines().next(), Some("JPEG XL Konverter – Protokoll"));
+
+        // The file fails again, so the retry writes a log of its own.
+        t.queue.retry_failed(Mode::Enc, settings(), Lang::En);
+        let second = fs::read_to_string(t.sink.wait_finished(2).log_path.unwrap()).unwrap();
+
+        assert_eq!(
+            second.lines().next(),
+            Some("JPEG XL Converter – Log"),
+            "{second}"
+        );
+        assert!(second.contains("Error\tQ:\\bilder\\e.png\t"), "{second}");
+        assert!(!second.contains("Fehler"), "{second}");
     }
 
     fn real_processor() -> RealProcessor {

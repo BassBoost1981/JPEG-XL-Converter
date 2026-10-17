@@ -6,11 +6,13 @@ import type {
   InputKind,
   ItemEvent,
   JobSettings,
+  Lang,
   Mode,
   PauseReason,
   PreviewDto,
   QueueItem,
   RunSummary,
+  StorageInfo,
   ToolStatus,
 } from "./types";
 import type { UiSettings } from "../state/settings";
@@ -100,7 +102,7 @@ export class MockBackend implements Backend {
   }
 
   async checkTools(): Promise<ToolStatus> {
-    return { ok: true, cjxlVersion: "0.12.0 (Simulation)", djxlVersion: "0.12.0 (Simulation)", message: null };
+    return { ok: true, cjxlVersion: "0.12.0 (Simulation)", djxlVersion: "0.12.0 (Simulation)", messages: [] };
   }
 
   async addPaths(_paths: string[], mode: Mode): Promise<AddResult> {
@@ -129,11 +131,11 @@ export class MockBackend implements Backend {
     this.items = this.items.filter((i) => i.mode !== mode);
   }
 
-  async startRun(mode: Mode, s: JobSettings): Promise<void> {
+  async startRun(mode: Mode, s: JobSettings, _lang: Lang): Promise<void> {
     this.begin(mode, s, (i) => i.status === "waiting");
   }
 
-  async retryFailed(mode: Mode, s: JobSettings): Promise<void> {
+  async retryFailed(mode: Mode, s: JobSettings, _lang: Lang): Promise<void> {
     this.begin(mode, s, (i) => i.status === "error" || i.status === "verifyFailed");
   }
 
@@ -155,7 +157,7 @@ export class MockBackend implements Backend {
     this.clearTimer();
     if (this.current) {
       this.current.status = "waiting";
-      this.emit({ id: this.current.item.id, status: "waiting", progress: 0, outSize: null, note: null });
+      this.emit({ id: this.current.item.id, status: "waiting", progress: 0, outSize: null, notes: [] });
     }
     this.finish();
   }
@@ -184,12 +186,20 @@ export class MockBackend implements Backend {
 
   async openLog(_path: string): Promise<void> {}
 
-  async pickFiles(mode: Mode): Promise<string[]> {
+  async pickFiles(mode: Mode, _labels: { title: string; filterImages: string }): Promise<string[]> {
     return [mode === "enc" ? "C:\\Users\\Lena\\Bilder\\DSC_4021.jpg" : "C:\\Users\\Lena\\Bilder\\DSC_4021.jxl"];
   }
 
-  async pickFolder(): Promise<string | null> {
+  async pickFolder(_title: string): Promise<string | null> {
     return "C:\\Users\\Lena\\Bilder";
+  }
+
+  async systemLocale(): Promise<string | null> {
+    return navigator.language;
+  }
+
+  async storageInfo(): Promise<StorageInfo> {
+    return { readOnly: false };
   }
 
   onItemProgress(cb: (e: ItemEvent) => void): () => void {
@@ -214,6 +224,9 @@ export class MockBackend implements Backend {
   minimize(): void {}
   toggleMaximize(): void {}
   close(): void {}
+  setTitle(title: string): void {
+    document.title = title;
+  }
   onCloseRequested(_cb: () => boolean): () => void {
     return () => {};
   }
@@ -249,13 +262,13 @@ export class MockBackend implements Backend {
       if (this.current === null) return this.finish();
       this.step = 0;
       this.current.status = "running";
-      this.emit({ id: this.current.item.id, status: "running", progress: 0, outSize: null, note: null });
+      this.emit({ id: this.current.item.id, status: "running", progress: 0, outSize: null, notes: [] });
       return this.schedule();
     }
     this.step++;
     if (this.step < this.steps) {
       const progress = Math.round((this.step / this.steps) * 100);
-      this.emit({ id: this.current.item.id, status: "running", progress, outSize: null, note: null });
+      this.emit({ id: this.current.item.id, status: "running", progress, outSize: null, notes: [] });
       return this.schedule();
     }
     this.complete(this.current);
@@ -272,7 +285,13 @@ export class MockBackend implements Backend {
     if (this.claimed.has(key)) {
       m.status = "skipped";
       this.summary.skipped++;
-      this.emit({ id: m.item.id, status: "skipped", progress: 100, outSize: null, note: "Zieldatei existiert bereits" });
+      this.emit({
+        id: m.item.id,
+        status: "skipped",
+        progress: 100,
+        outSize: null,
+        notes: [{ key: "error.targetExists" }],
+      });
       return;
     }
     this.claimed.add(key);
@@ -280,7 +299,7 @@ export class MockBackend implements Backend {
     m.status = "done";
     this.summary.done++;
     this.summary.bytesOut += outSize;
-    this.emit({ id: m.item.id, status: "done", progress: 100, outSize, note: null });
+    this.emit({ id: m.item.id, status: "done", progress: 100, outSize, notes: [] });
   }
 
   private resultSize(kind: InputKind, size: number): number {

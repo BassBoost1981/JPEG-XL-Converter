@@ -13,6 +13,7 @@ use windows::Win32::Storage::FileSystem::{MOVE_FILE_FLAGS, MoveFileExW};
 use windows::core::HSTRING;
 
 use super::args::{DjxlTarget, djxl_args};
+use super::msg::{Msg, keys};
 use super::originals::RecycleBin;
 use super::targets::tmp_path;
 use super::tools::{ToolError, Tools, extended_length};
@@ -33,11 +34,6 @@ pub struct Ctx<'a> {
 /// Largest decoded image the pixel check accepts (as in `convert_io`).
 const MAX_DECODED_BYTES: u64 = 4 << 30;
 
-pub(super) const TARGET_EXISTS: &str = "Zieldatei existiert bereits";
-pub(super) const NOTE_METADATA: &str = "Metadaten nicht vollständig übernommen";
-pub(super) const NOTE_DATES: &str = "Dateidatum nicht übernommen";
-const NOTE_SEPARATOR: &str = " · ";
-
 /// Makes the work file names of parallel calls distinct.
 static NEXT_WORK_ID: AtomicU64 = AtomicU64::new(0);
 
@@ -53,30 +49,41 @@ pub(super) fn unique_prefix(kind: &str) -> String {
 
 /// Why a file did not get to the end.
 pub(super) enum Stop {
-    Skipped(&'static str),
-    Error(String),
-    VerifyFailed(&'static str),
+    Skipped(Msg),
+    Error(Msg),
+    VerifyFailed(Msg),
     Cancelled,
 }
 
 impl Stop {
-    pub(super) fn error(reason: &str) -> Stop {
-        Stop::Error(reason.to_string())
+    /// `Skipped` with the message `key`.
+    pub(super) fn skipped(key: &str) -> Stop {
+        Stop::Skipped(Msg::new(key))
+    }
+
+    /// `Error` with the message `key`.
+    pub(super) fn error(key: &str) -> Stop {
+        Stop::Error(Msg::new(key))
+    }
+
+    /// `VerifyFailed` with the message `key`.
+    pub(super) fn verify_failed(key: &str) -> Stop {
+        Stop::VerifyFailed(Msg::new(key))
     }
 
     pub(super) fn into_outcome(self) -> Outcome {
-        let (status, note) = match self {
-            Stop::Skipped(note) => (ItemStatus::Skipped, Some(note.to_string())),
-            Stop::Error(reason) => (ItemStatus::Error, Some(reason)),
-            Stop::VerifyFailed(reason) => (ItemStatus::VerifyFailed, Some(reason.to_string())),
+        let (status, notes) = match self {
+            Stop::Skipped(note) => (ItemStatus::Skipped, vec![note]),
+            Stop::Error(reason) => (ItemStatus::Error, vec![reason]),
+            Stop::VerifyFailed(reason) => (ItemStatus::VerifyFailed, vec![reason]),
             // The queue puts the entry back.
-            Stop::Cancelled => (ItemStatus::Waiting, None),
+            Stop::Cancelled => (ItemStatus::Waiting, Vec::new()),
         };
         Outcome {
             status,
             out_path: None,
             out_size: None,
-            note,
+            notes,
         }
     }
 }
@@ -129,21 +136,20 @@ pub(super) fn check_cancel(ctx: &Ctx) -> Result<(), Stop> {
 /// An existing target is never replaced.
 pub(super) fn check_target(target: &Path) -> Result<(), Stop> {
     if fs::symlink_metadata(target).is_ok() {
-        Err(Stop::Skipped(TARGET_EXISTS))
+        Err(Stop::skipped(keys::TARGET_EXISTS))
     } else {
         Ok(())
     }
 }
 
+/// The message key for a source that cannot be opened.
 pub(super) fn open_reason(e: &io::Error) -> &'static str {
     const ERROR_SHARING_VIOLATION: i32 = 32;
     const ERROR_LOCK_VIOLATION: i32 = 33;
     match (e.kind(), e.raw_os_error()) {
-        (io::ErrorKind::NotFound, _) => "Datei nicht gefunden",
-        (_, Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)) => {
-            "Datei wird von einem anderen Programm verwendet"
-        }
-        _ => "Datei lässt sich nicht öffnen",
+        (io::ErrorKind::NotFound, _) => keys::NOT_FOUND,
+        (_, Some(ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)) => keys::IN_USE,
+        _ => keys::CANNOT_OPEN,
     }
 }
 
@@ -158,16 +164,15 @@ pub(super) fn prepare<'a>(
     let tmp = tmp_path(target);
     match fs::remove_file(&tmp) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => {
-            return Err(Stop::error("Alte Zwischendatei lässt sich nicht löschen"));
+            return Err(Stop::error(keys::STALE_TEMP_FILE));
         }
         _ => {}
     }
     scratch.add(tmp.clone());
     if let Some(dir) = target.parent() {
-        fs::create_dir_all(dir).map_err(|_| Stop::error("Zielordner lässt sich nicht anlegen"))?;
+        fs::create_dir_all(dir).map_err(|_| Stop::error(keys::TARGET_DIR_FAILED))?;
     }
-    fs::create_dir_all(ctx.work_dir)
-        .map_err(|_| Stop::error("Arbeitsordner lässt sich nicht anlegen"))?;
+    fs::create_dir_all(ctx.work_dir).map_err(|_| Stop::error(keys::WORK_DIR_FAILED))?;
     let prefix = unique_prefix(kind);
     Ok(Work {
         tmp,
@@ -198,17 +203,17 @@ pub(super) fn run_djxl(
 pub(super) fn place(tmp: &Path, target: &Path, scratch: &mut Scratch) -> Result<(), Stop> {
     if move_new(tmp, target).is_err() {
         return Err(if fs::symlink_metadata(target).is_ok() {
-            Stop::Skipped(TARGET_EXISTS)
+            Stop::skipped(keys::TARGET_EXISTS)
         } else {
-            Stop::error("Zieldatei lässt sich nicht anlegen")
+            Stop::error(keys::TARGET_CREATE_FAILED)
         });
     }
     scratch.keep(tmp);
     Ok(())
 }
 
-/// The outcome of a finished item: `Done`, or `DoneWithNote` with the notes joined.
-pub(super) fn finished(target: &Path, notes: Vec<String>) -> Outcome {
+/// The outcome of a finished item: `Done`, or `DoneWithNote` with the notes.
+pub(super) fn finished(target: &Path, notes: Vec<Msg>) -> Outcome {
     Outcome {
         status: if notes.is_empty() {
             ItemStatus::Done
@@ -217,7 +222,7 @@ pub(super) fn finished(target: &Path, notes: Vec<String>) -> Outcome {
         },
         out_path: Some(target.to_path_buf()),
         out_size: fs::metadata(target).ok().map(|m| m.len()),
-        note: (!notes.is_empty()).then(|| notes.join(NOTE_SEPARATOR)),
+        notes,
     }
 }
 

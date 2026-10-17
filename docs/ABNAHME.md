@@ -1,17 +1,23 @@
-# Abnahme: JPEG XL Konverter
+# Abnahme: JPEG XL Converter
 
 Schritt für Schritt, mit Haken. **Arbeite zuerst nur an Kopien.** Das Programm löscht nie
 etwas endgültig; mit dem Papierkorb-Schalter schiebt es Originale nach erfolgreicher Prüfung
 in den Windows-Papierkorb. Trotzdem gilt: Erst alles an einer Kopie prüfen, dann am echten Archiv.
 
-Das Programm liegt portabel in `dist-portable\JPEG XL Konverter\` (`JPEG XL Konverter.exe`,
+Das Programm liegt portabel in `dist-portable\JPEG XL Converter\` (`JPEG XL Converter.exe`,
 `cjxl.exe`, `djxl.exe` und `LICENSES\` müssen im selben Ordner bleiben). Erzeugt wird der Ordner
-mit `.\scripts\package-portable.ps1`.
+mit `.\scripts\package-portable.ps1`. Der Ordner `data\` ist nicht dabei, er entsteht beim ersten
+Start neben der Exe (Einstellungen, Fensterposition, Protokolle).
+
+Die Bezeichnungen unten gelten für die **deutsche** Oberfläche. Stelle die Sprache dafür über den
+Knopf mit den Reglern in der Titelleiste (Programm-Einstellungen → Sprache) auf „Deutsch“. Die
+englische Fassung dieser Liste ist [`ACCEPTANCE.md`](ACCEPTANCE.md).
 
 ## 0. Vorbereitung
 
-- [ ] `JPEG XL Konverter.exe` aus dem Ordner starten. Es erscheint **kein** Hinweisbalken
-      „cjxl/djxl fehlen“ und der Start-Knopf ist nicht gesperrt.
+- [ ] `JPEG XL Converter.exe` aus dem Ordner starten. Es erscheint **kein** Hinweisbalken
+      „cjxl.exe oder djxl.exe fehlt neben dem Programm.“ und der Start-Knopf ist nicht gesperrt.
+- [ ] Neben der Exe ist ein Ordner `data\` entstanden.
 - [ ] Der Schalter „Originale nach Prüfung in den Papierkorb“ ist beim Start **aus**
       (auch nach einem Neustart, selbst wenn er vorher an war).
 
@@ -131,14 +137,53 @@ und die CSV aus Schritt 1.
       auf diesem Laufwerk“.
 - [ ] Nichts wurde endgültig gelöscht; der Stick enthält Originale und `.jxl`.
 
-## 6. Kein Netzwerkzugriff
+## 6. Portabel vom USB-Stick
+
+Der Programmordner `JPEG XL Converter\` (mit den drei `.exe` und `LICENSES\`, **ohne** `data\`)
+liegt auf einem USB-Stick, die Prüfung läuft von dort aus. Hat der Start in Schritt 0 neben der
+Exe schon ein `data\` angelegt, dieses **vor dem Kopieren auf den Stick löschen** (oder ein frisch
+gebautes Paket kopieren), damit `data\` auf dem Stick wirklich neu entsteht.
+
+- [ ] Vorher notieren, welche Ordner es unter `%APPDATA%` und `%LOCALAPPDATA%` gibt
+      (zum Beispiel die Namen in beiden Ordnern aufschreiben oder die Ordnerlisten speichern).
+- [ ] `JPEG XL Converter.exe` **vom Stick** starten. Neben der Exe entsteht `data\`.
+- [ ] In den Programm-Einstellungen (Knopf mit den Reglern in der Titelleiste) **Sprache** auf
+      „English“ und **Erscheinungsbild** auf die jeweils andere Einstellung (Hell ↔ Dunkel) umstellen.
+      Die Oberfläche wechselt sofort komplett die Sprache. Auch der Fenstertitel wechselt zu
+      „JPEG XL Converter“. Das Fenster hat keine Windows-Titelleiste, und die Leiste im Programm
+      zeigt nur „JPEG XL“; den Titel siehst du im Tooltip des Taskleistenknopfs (Maus darüber
+      halten) oder in der Alt+Tab-Ansicht.
+- [ ] Das Fenster mit dem Schließen-Knopf **schließen**. Es schließt sich und der Prozess endet.
+      `%TEMP%\jpeg-xl-konverter\<pid>` samt `webview` ist danach weg.
+- [ ] Programm **erneut vom Stick starten**: Sprache und Erscheinungsbild sind noch so, wie du sie
+      gesetzt hast (die Einstellungen liegen in `data\settings.json`, die Fensterposition in
+      `data\window.json`).
+- [ ] Einen kurzen Durchlauf machen. Das Protokoll liegt in `data\logs\` auf dem Stick;
+      „Protokoll öffnen“ öffnet es.
+- [ ] **Unter `%APPDATA%` und `%LOCALAPPDATA%` ist kein App-Ordner entstanden** (kein
+      `de.bassboost1981.jpegxlkonverter`, kein `JPEG XL Konverter`, kein `JPEG XL Converter`).
+      Die Listen gleichen der Notiz von oben. Ordner einer früheren Version können dort
+      liegen; die App übernimmt sie nicht und löscht sie nicht (du kannst sie von Hand löschen).
+- [ ] Optional, Nur-Lesen-Modus: Den Stick mit dem Schreibschutzschalter sperren (oder den
+      Programmordner an einen Ort ohne Schreibrecht legen) und das Programm starten.
+      - Eine vorhandene `data\settings.json` wird gelesen (Sprache und Erscheinungsbild stimmen
+        mit dem zuletzt Gesetzten überein).
+      - Einmal pro Start erscheint der Hinweis in der **oben eingestellten Sprache** (hier also
+        Englisch, weil der Schritt davor sie umgestellt hat). Englisch: „App folder is read-only –
+        settings are not saved, logs go to the temp folder.“ Deutsch: „Programmordner ist
+        schreibgeschützt – Einstellungen werden nicht gespeichert, Protokolle liegen im
+        Temp-Ordner.“
+      - Änderungen wirken, werden aber nicht gespeichert.
+      - Das Protokoll liegt in `%TEMP%\jpeg-xl-konverter\logs\`.
+
+## 7. Kein Netzwerkzugriff
 
 - [ ] Ressourcenmonitor öffnen (`resmon`), Reiter „Netzwerk“.
 - [ ] Programm starten und einen Durchlauf machen. Unter „Prozesse mit Netzwerkaktivität“ und
-      „TCP-Verbindungen“ tauchen weder `JPEG XL Konverter.exe` noch `cjxl.exe`/`djxl.exe` auf.
+      „TCP-Verbindungen“ tauchen weder `JPEG XL Converter.exe` noch `cjxl.exe`/`djxl.exe` auf.
 - [ ] Optional: Netzwerk trennen (Flugmodus), alles funktioniert und die Schrift ist Lexend.
 
-## 7. Zum Schluss: das echte Archiv
+## 8. Zum Schluss: das echte Archiv
 
 Erst wenn **alle** Haken oben gesetzt sind:
 

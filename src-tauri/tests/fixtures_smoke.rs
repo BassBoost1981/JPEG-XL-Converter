@@ -91,7 +91,7 @@ fn tools_are_found_and_runnable() {
     let tools = common::tools();
     assert!(tools.cjxl.is_file() && tools.djxl.is_file());
     let status = tools.check();
-    assert!(status.ok, "{:?}", status.message);
+    assert!(status.ok, "{:?}", status.messages);
 }
 
 #[test]

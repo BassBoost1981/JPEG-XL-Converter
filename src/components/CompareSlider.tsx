@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { backend } from "../api";
-import type { InputKind, Mode, OutputFormat, PreviewDto } from "../api/types";
+import type { InputKind, Mode, Msg, OutputFormat, PreviewDto } from "../api/types";
+import { msgText } from "../i18n";
+import { useLang, useT } from "../i18n/useT";
 import { formatDistance, formatSize } from "../lib/format";
 import { toJobSettings } from "../state/settings";
 import { useApp } from "../state/store";
@@ -18,8 +20,8 @@ const KIND_LABEL: Record<InputKind, string> = {
   jxl: "JXL",
 };
 
-const FORMAT_LABEL: Record<OutputFormat, string> = {
-  auto: "Original",
+// "auto" shows the catalog's "Original".
+const FORMAT_LABEL: Record<Exclude<OutputFormat, "auto">, string> = {
   png: "PNG",
   jpg: "JPG",
   webp: "WEBP",
@@ -28,10 +30,18 @@ const FORMAT_LABEL: Record<OutputFormat, string> = {
 
 const baseName = (path: string) => path.split(/[\\/]/).pop() ?? path;
 
+/** The reason the backend sent (`preview.unsupported`, ...); anything else that was thrown is the general "unavailable". */
+const failureMsg = (e: unknown): Msg =>
+  typeof e === "object" && e !== null && typeof (e as { key?: unknown }).key === "string"
+    ? (e as Msg)
+    : { key: "preview.unavailable" };
+
 const TAG = "pointer-events-none absolute top-2.5 rounded-full px-2.5 py-1 text-xs";
 
 export function CompareSlider() {
   const mode: Mode = useApp((s) => s.settings.mode);
+  const t = useT();
+  const lang = useLang();
   const settings = useApp((s) => s.settings);
   const row = useApp((s) => {
     const id = s.selected[s.settings.mode];
@@ -46,7 +56,7 @@ export function CompareSlider() {
 
   const [split, setSplit] = useState(50);
   const [preview, setPreview] = useState<PreviewDto | null>(null);
-  const [failed, setFailed] = useState(false);
+  const [failure, setFailure] = useState<Msg | null>(null);
   const field = useRef<HTMLDivElement>(null);
   const lastId = useRef<number | null>(null);
   const jobRef = useRef(job);
@@ -56,7 +66,7 @@ export function CompareSlider() {
     if (itemId === null) {
       lastId.current = null;
       setPreview(null);
-      setFailed(false);
+      setFailure(null);
       return;
     }
     const previousId = lastId.current;
@@ -64,7 +74,7 @@ export function CompareSlider() {
     lastId.current = itemId;
     if (selectionChanged) {
       setPreview(null);
-      setFailed(false);
+      setFailure(null);
     }
 
     let stale = false;
@@ -80,12 +90,12 @@ export function CompareSlider() {
         .then((p) => {
           if (stale) return;
           setPreview(p);
-          setFailed(false);
+          setFailure(null);
         })
-        .catch(() => {
+        .catch((e: unknown) => {
           if (stale) return;
           setPreview(null);
-          setFailed(true);
+          setFailure(failureMsg(e));
         });
     };
 
@@ -103,21 +113,21 @@ export function CompareSlider() {
 
   const finishedSize =
     row && (row.status === "done" || row.status === "doneWithNote") && row.outSize !== undefined
-      ? ` · ${formatSize(row.outSize)}`
+      ? ` · ${formatSize(row.outSize, lang)}`
       : "";
   const leftTag = row
-    ? `${mode === "enc" ? KIND_LABEL[row.entry.kind] : "JXL"} · ${formatSize(row.entry.size)}`
+    ? `${mode === "enc" ? KIND_LABEL[row.entry.kind] : "JXL"} · ${formatSize(row.entry.size, lang)}`
     : "";
   const rightTag = row
     ? mode === "enc"
-      ? `JXL · ${job.encode.distance === 0 ? "verlustfrei" : `d ${formatDistance(job.encode.distance)}`}${finishedSize}`
-      : `${FORMAT_LABEL[job.decode.format]}${finishedSize}`
+      ? `${job.encode.distance === 0 ? t("compare.jxlLossless") : `JXL · d ${formatDistance(job.encode.distance)}`}${finishedSize}`
+      : `${job.decode.format === "auto" ? t("col.original") : FORMAT_LABEL[job.decode.format]}${finishedSize}`
     : "";
 
   return (
     <div className="flex flex-col gap-2.5">
       <div className="flex items-center gap-2 px-1 py-0.5">
-        <span className="font-semibold">Vorher / Nachher</span>
+        <span className="font-semibold">{t("compare.title")}</span>
         {row && (
           <span className="text-xs text-[var(--muted)]">
             {baseName(row.entry.path)} · {row.entry.width} × {row.entry.height}
@@ -127,7 +137,7 @@ export function CompareSlider() {
       <div ref={field} className="relative h-[240px] overflow-hidden rounded-[10px] bg-[repeating-linear-gradient(135deg,var(--stripe-a)_0_10px,var(--stripe-b)_10px_20px)]">
         {!row ? (
           <div className="absolute inset-0 flex items-center justify-center text-[var(--muted)]">
-            Keine Datei ausgewählt
+            {t("compare.none")}
           </div>
         ) : (
           <>
@@ -135,23 +145,23 @@ export function CompareSlider() {
               <>
                 <img
                   src={preview.before}
-                  alt="Vorher"
+                  alt={t("compare.before")}
                   draggable={false}
                   className="absolute inset-0 h-full w-full object-cover"
                 />
                 <img
                   data-testid="compare-after"
                   src={preview.after}
-                  alt="Nachher"
+                  alt={t("compare.after")}
                   draggable={false}
                   className="absolute inset-0 h-full w-full object-cover"
                   style={{ clipPath: `inset(0 0 0 ${split}%)` }}
                 />
               </>
             )}
-            {failed && (
+            {failure && (
               <div className="absolute inset-0 flex items-center justify-center text-[var(--muted)]">
-                Vorschau nicht möglich
+                {msgText(lang, failure)}
               </div>
             )}
             <span className={`${TAG} left-2.5 bg-[var(--overlay)]`}>{leftTag}</span>
@@ -170,7 +180,7 @@ export function CompareSlider() {
               min={0}
               max={100}
               value={split}
-              aria-label="Trennlinie"
+              aria-label={t("compare.divider")}
               onChange={(e) => setSplit(Number(e.target.value))}
               className="absolute inset-0 m-0 h-full w-full cursor-ew-resize opacity-0"
             />

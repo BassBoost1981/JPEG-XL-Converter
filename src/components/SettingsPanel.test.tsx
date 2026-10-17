@@ -12,6 +12,7 @@ function setSettings(patch: Partial<UiSettings>, run: "idle" | "running" | "paus
 
 beforeEach(() => {
   vi.spyOn(backend, "saveSettings").mockResolvedValue();
+  useApp.setState({ systemLang: "de" });
   setSettings({});
 });
 
@@ -35,6 +36,85 @@ describe("SettingsPanel", () => {
     expect(screen.getByRole("switch", { name: /JPEGs verlustfrei transkodieren/ })).toBeChecked();
     expect(screen.getByRole("switch", { name: /Metadaten behalten/ })).toBeChecked();
     expect(screen.getByRole("switch", { name: /Originale nach Prüfung in den Papierkorb/ })).not.toBeChecked();
+  });
+
+  describe("auf Englisch", () => {
+    it("Kodierung: Titel, Stufen, Schalter und Ausgabeordner", () => {
+      setSettings({ lang: "en" });
+      render(<SettingsPanel />);
+      expect(screen.getByText("Settings")).toBeInTheDocument();
+      expect(screen.getByText("Encoding · to JPEG XL")).toBeInTheDocument();
+      expect(screen.getByRole("radiogroup", { name: "Quality" })).toBeInTheDocument();
+      for (const name of ["Lossless", "High quality", "Balanced", "Small"]) {
+        expect(screen.getByRole("radio", { name: new RegExp(name) })).toBeInTheDocument();
+      }
+      expect(screen.getByRole("radio", { name: /Lossless/ })).toBeChecked();
+      expect(screen.getByText("recommended · pixel-exact")).toBeInTheDocument();
+      expect(screen.getByText("d 1.2")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: /Losslessly transcode JPEGs/ })).toBeChecked();
+      expect(screen.getByText("~20 % smaller, bit-exact reversible")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: /Keep metadata/ })).toBeChecked();
+      expect(screen.getByText("EXIF, XMP, color profile")).toBeInTheDocument();
+      expect(screen.getByRole("switch", { name: /Move originals to Recycle Bin after check/ })).not.toBeChecked();
+      expect(screen.getByText("Only if the result is lossless")).toBeInTheDocument();
+      expect(screen.getByText("Output folder · click to change")).toBeInTheDocument();
+      expect(screen.getByText("Next to the original file")).toBeInTheDocument();
+    });
+
+    it("Experte: Regler, Wert mit Distanz und Verlustfrei-Schalter", () => {
+      setSettings(enterExpert({ ...DEFAULT_SETTINGS, preset: "bal", lang: "en" }));
+      render(<SettingsPanel />);
+      expect(screen.getByRole("slider", { name: "Quality" })).toHaveValue("88");
+      expect(screen.getByText("88 · Distance 1.18")).toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "Effort" })).toHaveValue("7");
+      expect(screen.getByRole("switch", { name: /^Lossless(?!ly)/ })).not.toBeChecked();
+      expect(screen.getByText("Pixel-exact, ignores quality")).toBeInTheDocument();
+    });
+
+    it("Dekodierung: Zielformat, Automatisch, Formatkarten, JPEG-Qualität und Bittiefe", () => {
+      setSettings({ lang: "en", mode: "dec", expert: true, decodeFormat: "jpg" });
+      const a = render(<SettingsPanel />);
+      expect(screen.getByText("Decoding · from JPEG XL")).toBeInTheDocument();
+      expect(screen.getByText("Output format")).toBeInTheDocument();
+      expect(screen.getByRole("radiogroup", { name: "Output format" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: /Automatic/ })).not.toBeChecked();
+      expect(screen.getByText("Original JPEG, otherwise PNG")).toBeInTheDocument();
+      expect(screen.getByText("lossless")).toBeInTheDocument();
+      expect(screen.getByText("compatible")).toBeInTheDocument();
+      expect(screen.getByText("Print")).toBeInTheDocument();
+      expect(
+        screen.getByText("Files transcoded from JPEG are restored bit-exact as the original JPEG."),
+      ).toBeInTheDocument();
+      expect(screen.getByRole("slider", { name: "JPEG quality" })).toHaveValue("92");
+      a.unmount();
+
+      setSettings({ lang: "en", mode: "dec", expert: true, decodeFormat: "png" });
+      render(<SettingsPanel />);
+      expect(screen.getByText("Bit depth")).toBeInTheDocument();
+      expect(screen.getByRole("radiogroup", { name: "Bit depth" })).toBeInTheDocument();
+      expect(screen.getByRole("radio", { name: "16 bit" })).toBeChecked();
+      expect(screen.getByRole("radio", { name: "8 bit" })).toBeInTheDocument();
+    });
+
+    it("Ausgabeordner: Menü und Ordnerdialog in der Sprache", async () => {
+      setSettings({ lang: "en" });
+      const pick = vi.spyOn(backend, "pickFolder").mockResolvedValue("D:\\Out");
+      render(<SettingsPanel />);
+      const u = user();
+      await u.click(screen.getByRole("button", { name: /Output folder/ }));
+      expect(await screen.findByRole("menuitem", { name: "Next to the original file" })).toBeInTheDocument();
+      await u.click(screen.getByRole("menuitem", { name: "Choose folder …" }));
+      expect(pick).toHaveBeenCalledWith("Select folder");
+      expect(useApp.getState().settings.output).toEqual({ kind: "folder", path: "D:\\Out" });
+    });
+  });
+
+  it("Stufennamen kommen aus dem Katalog der gewählten Sprache", () => {
+    setSettings({ lang: "en" });
+    render(<SettingsPanel />);
+    for (const name of ["Lossless", "High quality", "Balanced", "Small"]) {
+      expect(screen.getByRole("radio", { name: new RegExp(name) })).toBeInTheDocument();
+    }
   });
 
   it("Klick auf eine Stufe setzt die Voreinstellung", async () => {
@@ -138,6 +218,7 @@ describe("SettingsPanel", () => {
       await u.click(screen.getByRole("button", { name: /Ausgabeordner/ }));
       await u.click(await screen.findByRole("menuitem", { name: "Ordner wählen …" }));
       expect(pick).toHaveBeenCalledTimes(1);
+      expect(pick).toHaveBeenCalledWith("Ordner auswählen");
       expect(useApp.getState().settings.output).toEqual({ kind: "folder", path: "D:\\Ausgabe" });
       expect(await screen.findByText("D:\\Ausgabe")).toBeInTheDocument();
     });

@@ -7,6 +7,8 @@ import { RunFooter } from "./components/RunFooter";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { TitleBar } from "./components/TitleBar";
 import { ToolsBanner } from "./components/ToolsBanner";
+import { translate } from "./i18n";
+import { useLang, useT } from "./i18n/useT";
 import { useApp } from "./state/store";
 
 const CARD = "rounded-[14px] bg-[var(--card)] shadow-[var(--card-shadow)]";
@@ -16,7 +18,8 @@ function Card({ className = "", children }: { className?: string; children: Reac
 }
 
 function App() {
-  const toolsMissing = useApp((s) => s.tools?.ok === false);
+  const lang = useLang();
+  const t = useT();
   const [confirmClose, setConfirmClose] = useState(false);
   const closeAllowed = useRef(false);
 
@@ -25,14 +28,23 @@ function App() {
     return () => void ready.then((dispose) => dispose());
   }, []);
 
+  // Window title and document language follow the language in use (also on the first render).
+  useEffect(() => {
+    backend.setTitle(translate(lang, "app.title"));
+    document.documentElement.lang = lang;
+  }, [lang]);
+
   useEffect(
     () =>
       backend.onCloseRequested(() => {
-        if (closeAllowed.current) return true;
-        const { run } = useApp.getState();
-        if (run !== "running" && run !== "paused") return true;
-        setConfirmClose(true);
-        return false;
+        const { run, flushSettings } = useApp.getState();
+        if (!closeAllowed.current && (run === "running" || run === "paused")) {
+          setConfirmClose(true);
+          return false;
+        }
+        // The window closes: a settings change still in the 500 ms debounce must not be lost.
+        flushSettings();
+        return true;
       }),
     [],
   );
@@ -50,7 +62,7 @@ function App() {
   return (
     <div className="flex h-full flex-col">
       <TitleBar />
-      {toolsMissing && <ToolsBanner />}
+      <ToolsBanner />
       <main className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_360px] gap-4 p-4">
         <div className="flex min-h-0 flex-col gap-4">
           <Card className="flex-none p-3">
@@ -72,17 +84,17 @@ function App() {
         <AlertDialog.Container>
           <AlertDialog.Dialog>
             <AlertDialog.Header>
-              <AlertDialog.Heading>Wirklich beenden?</AlertDialog.Heading>
+              <AlertDialog.Heading>{t("dialog.quitTitle")}</AlertDialog.Heading>
             </AlertDialog.Header>
             <AlertDialog.Body>
-              <p>Laufende Umwandlungen werden abgebrochen.</p>
+              <p>{t("dialog.quitBody")}</p>
             </AlertDialog.Body>
             <AlertDialog.Footer>
               <Button variant="danger" onPress={() => void quit()}>
-                Beenden
+                {t("dialog.quit")}
               </Button>
               <Button variant="secondary" onPress={() => setConfirmClose(false)}>
-                Weiterarbeiten
+                {t("dialog.keepWorking")}
               </Button>
             </AlertDialog.Footer>
           </AlertDialog.Dialog>

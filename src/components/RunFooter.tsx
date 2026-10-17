@@ -1,6 +1,7 @@
 import { Button, ProgressBar } from "@heroui/react";
 import { backend } from "../api";
-import { ctaLabel, footerHint, formatDelta, summaryLine } from "../lib/format";
+import { useLang, useT } from "../i18n/useT";
+import { ctaLabel, ctaState, footerHint, formatDelta, summaryLine } from "../lib/format";
 import { useApp } from "../state/store";
 
 const DONE = new Set(["done", "doneWithNote"]);
@@ -16,6 +17,8 @@ export function RunFooter() {
   const pauseReason = useApp((s) => s.pauseReason);
   const summary = useApp((s) => s.summary);
   const toolsMissing = useApp((s) => s.tools?.ok === false);
+  const t = useT();
+  const lang = useLang();
   const { start, pause, resume, retryFailed } = useApp.getState();
 
   let done = 0;
@@ -42,46 +45,62 @@ export function RunFooter() {
   const shownIn = summary ? summary.bytesIn : bytesIn;
   const shownOut = summary ? summary.bytesOut : bytesOut;
   const hasResult = summary ? summary.done > 0 : done > 0;
-  const saved = hasResult && shownIn > 0 ? formatDelta(shownIn, shownOut) : "–";
+  const hasDelta = hasResult && shownIn > 0;
+  const saved = hasDelta ? formatDelta(shownIn, shownOut) : "–";
   const line = summary
-    ? summaryLine(summary)
-    : footerHint({ done, total: rows.length, bytesIn, bytesOut });
+    ? summaryLine(summary, lang)
+    : footerHint({ done, total: rows.length, bytesIn, bytesOut }, lang);
 
-  const label = ctaLabel({ mode, run, waiting, failed });
-  const canStart = run === "idle" || (run === "finished" && waiting > 0);
-  const disabled = toolsMissing || (run === "idle" && waiting === 0) || label === "Alles erledigt";
+  const cta = { mode, run, waiting, failed };
+  const state = ctaState(cta);
+  const label = ctaLabel(cta, lang);
+  // Label, disabled state and action all follow from `state`.
+  const disabled = toolsMissing || state === "empty" || state === "allDone";
 
   const onPress = () => {
-    if (run === "running") void pause();
-    else if (run === "paused") void resume();
-    else if (canStart) void start();
-    else if (failed > 0) void retryFailed();
+    switch (state) {
+      case "start":
+        void start();
+        break;
+      case "pause":
+        void pause();
+        break;
+      case "resume":
+        void resume();
+        break;
+      case "retry":
+        void retryFailed();
+        break;
+      case "allDone":
+      case "empty":
+        break;
+    }
   };
 
   return (
     <div className="flex flex-none flex-col gap-3 border-t border-[var(--line)] px-[18px] py-4">
       <div className="flex items-baseline justify-between gap-3">
-        <span className="text-pretty text-xs text-[var(--muted)]">{line}</span>
+        <span className="min-w-0 flex-1 text-pretty text-xs text-[var(--muted)]">{line}</span>
         <span
-          className="text-[22px] font-semibold"
-          style={{ color: saved.startsWith("−") ? "var(--good)" : "var(--muted)" }}
+          className="shrink-0 whitespace-nowrap text-[22px] font-semibold"
+          style={{ color: hasDelta && shownOut < shownIn ? "var(--good)" : "var(--muted)" }}
         >
           {saved}
         </span>
       </div>
-      <ProgressBar aria-label="Gesamtfortschritt" value={percent} size="sm" className="h-2 gap-0">
+      <ProgressBar aria-label={t("footer.progressLabel")} value={percent} size="sm" className="h-2 gap-0">
         <ProgressBar.Track className="h-2 rounded-full bg-[var(--d200)]">
           <ProgressBar.Fill />
         </ProgressBar.Track>
       </ProgressBar>
       {pauseReason?.type === "diskFull" && (
         <p className="m-0 text-xs text-[var(--danger,#f31260)]">
-          Kein Platz mehr auf Laufwerk {driveLabel(pauseReason.drive)}
+          {t("footer.noSpace", { drive: driveLabel(pauseReason.drive) })}
         </p>
       )}
       {summary?.logPath && (
         <Button size="sm" variant="ghost" onPress={() => void backend.openLog(summary.logPath!)}>
-          Protokoll öffnen
+          {t("footer.openLog")}
         </Button>
       )}
       <Button
