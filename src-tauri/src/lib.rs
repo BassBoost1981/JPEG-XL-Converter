@@ -1,6 +1,7 @@
 mod commands;
 pub mod engine;
 mod settings_store;
+mod storage;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -11,35 +12,24 @@ use tauri::{Manager, RunEvent};
 use commands::AppState;
 use engine::tools::Tools;
 
-/// `%LOCALAPPDATA%\JPEG XL Konverter\Protokolle`.
-fn log_dir() -> PathBuf {
-    let base = env::var_os("LOCALAPPDATA")
-        .map(PathBuf::from)
-        .unwrap_or_else(env::temp_dir);
-    base.join("JPEG XL Konverter").join("Protokolle")
-}
-
 pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .setup(|app| {
-            let work_dir = env::temp_dir()
-                .join("jpeg-xl-konverter")
-                .join(process::id().to_string());
-            fs::create_dir_all(&work_dir)?;
             let exe_dir = env::current_exe()?
                 .parent()
                 .map(PathBuf::from)
                 .unwrap_or_default();
-            let state = AppState::new(
-                app.handle().clone(),
-                Tools::locate(&exe_dir),
-                work_dir,
-                log_dir(),
-                app.path().app_config_dir()?,
+            let storage = storage::resolve(
+                &exe_dir,
+                &env::temp_dir(),
+                process::id(),
+                &storage::probe_writable,
             );
+            fs::create_dir_all(&storage.work_dir)?;
+            let state = AppState::new(app.handle().clone(), Tools::locate(&exe_dir), storage);
             app.manage(state);
             Ok(())
         })
@@ -58,6 +48,8 @@ pub fn run() {
             commands::load_settings,
             commands::save_settings,
             commands::open_log,
+            commands::storage_info,
+            commands::system_locale,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");
